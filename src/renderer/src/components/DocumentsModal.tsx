@@ -1,35 +1,31 @@
 
 import React, { useState, useRef, useCallback } from 'react'
-import { AppMode } from '../../../shared/types'
 import {
   AttachedDocument,
   getStoredDocuments,
   saveStoredDocuments,
   deleteStoredDocument,
-  parseFileToText
+  parseFileToText, summarizeDocument
 } from '../services/documents'
 
 interface DocumentsModalProps {
   isOpen: boolean
   onClose: () => void
-  activeMode: AppMode
   onDocumentsUpdated: () => void
 }
 
 export const DocumentsModal: React.FC<DocumentsModalProps> = ({
   isOpen,
   onClose,
-  activeMode,
   onDocumentsUpdated
 }) => {
-  const [targetMode, setTargetMode] = useState<AppMode | 'all'>(activeMode)
   const [isDragging, setIsDragging] = useState(false)
   const [parsing, setParsing] = useState(false)
   const [selectedPreview, setSelectedPreview] = useState<AttachedDocument | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const documents = getStoredDocuments()
-  const modeDocuments = documents.filter((d) => d.mode === 'all' || d.mode === targetMode)
+  const modeDocuments = documents
 
   const handleFiles = useCallback(
     async (fileList: FileList | null) => {
@@ -48,8 +44,9 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
             name: file.name,
             size: file.size,
             type: file.type || 'text/plain',
-            mode: targetMode,
+            mode: 'all',
             content: text,
+            summary: await summarizeDocument(text),
             addedAt: Date.now()
           })
         }
@@ -65,7 +62,7 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
         }
       }
     },
-    [documents, targetMode, onDocumentsUpdated]
+    [documents, onDocumentsUpdated]
   )
 
   const handleDragOver = (e: React.DragEvent): void => {
@@ -101,8 +98,7 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
         {/* Header */}
         <div className="settings-header">
           <div className="settings-title">
-            <span>📄 Resume & Context Documents</span>
-            <span className="settings-badge">Grounding & Personalization</span>
+            <span>Documents</span>
           </div>
           <button className="settings-close-btn" onClick={onClose}>
             ✕
@@ -110,22 +106,6 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
         </div>
 
         <div className="settings-body">
-          {/* Target Mode Selector */}
-          <div className="docs-mode-selector">
-            <span className="field-label">Attach Document To:</span>
-            <div className="modes-tab-bar mini">
-              {(['interview', 'meeting', 'sales', 'custom', 'all'] as const).map((m) => (
-                <button
-                  key={m}
-                  className={`mode-tab-btn ${targetMode === m ? 'active' : ''}`}
-                  onClick={() => setTargetMode(m)}
-                >
-                  {m.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* Drag & Drop Zone */}
           <div
             className={`drop-zone ${isDragging ? 'dragging' : ''}`}
@@ -149,9 +129,6 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
             <div className="drop-subtext">
               Supports <b>PDF, TXT, Markdown</b> • Click to browse files
             </div>
-            <div className="drop-target-pill">
-              Target: <b>{targetMode.toUpperCase()} MODE</b>
-            </div>
           </div>
 
           {/* Documents List */}
@@ -162,7 +139,7 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
 
             {modeDocuments.length === 0 ? (
               <div className="empty-message docs-empty">
-                No documents uploaded for {targetMode.toUpperCase()} mode yet. Drop your CV above so the AI answers interview questions using your actual career experience!
+                No documents yet. Drop a CV, job description or notes above. Add several and switch each on or off.
               </div>
             ) : (
               <div className="docs-scroll-list">
@@ -172,17 +149,26 @@ export const DocumentsModal: React.FC<DocumentsModalProps> = ({
                     className={`doc-card ${selectedPreview?.id === doc.id ? 'active' : ''}`}
                     onClick={() => setSelectedPreview(doc)}
                   >
-                    <div className="doc-icon">📄</div>
-                    <div className="doc-details">
+                                        <div className="doc-details">
                       <div className="doc-name">{doc.name}</div>
                       <div className="doc-meta">
                         <span>{(doc.size / 1024).toFixed(1)} KB</span>
                         <span>•</span>
-                        <span className="doc-mode-tag">{doc.mode.toUpperCase()}</span>
-                        <span>•</span>
-                        <span>{doc.content.slice(0, 45).replace(/\n/g, ' ')}...</span>
+                        <span>{doc.summary ? 'condensed' : 'not condensed yet'}</span>
                       </div>
                     </div>
+                    <button
+                      className={`tool-pill ${doc.active === false ? '' : 'auto-active'}`}
+                      style={{ width: 'auto', padding: '0 10px', fontSize: 10, height: 24 }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        saveStoredDocuments(documents.map((x) => (x.id === doc.id ? { ...x, active: doc.active === false } : x)))
+                        onDocumentsUpdated()
+                      }}
+                      title="Use this document in answers"
+                    >
+                      <span style={{ display: 'inline' }}>{doc.active === false ? 'Off' : 'In use'}</span>
+                    </button>
                     <button
                       className="doc-delete-btn"
                       onClick={(e) => handleDelete(doc.id, e)}
