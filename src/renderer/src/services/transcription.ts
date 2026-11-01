@@ -1,12 +1,14 @@
+import { getStoredApiKey } from './openrouter'
+
 export interface TranscriptTurn {
   id: string
-  speaker: 'Interviewer' | 'Candidate'
+  speaker: 'Interviewer' | 'You'
   text: string
   timestamp: number
   isQuestion?: boolean
 }
 
-export type STTProvider = 'browser' | 'groq' | 'openai' | 'local'
+export type STTProvider = 'openrouter' | 'groq' | 'openai' | 'local'
 
 export interface STTConfig {
   provider: STTProvider
@@ -21,7 +23,7 @@ export interface STTConfig {
 const STORAGE_KEY_STT = 'ghost_stt_config'
 
 export const DEFAULT_STT_CONFIG: STTConfig = {
-  provider: 'browser',
+  provider: 'openrouter',
   groqApiKey: '',
   openaiApiKey: '',
   localEndpoint: 'http://127.0.0.1:8178/inference',
@@ -33,7 +35,10 @@ export function getStoredSTTConfig(): STTConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_STT)
     if (raw) {
-      return { ...DEFAULT_STT_CONFIG, ...JSON.parse(raw) }
+      const cfg = { ...DEFAULT_STT_CONFIG, ...JSON.parse(raw) }
+      // The old browser engine never worked in Electron (no speech backend); move everyone to OpenRouter.
+      if ((cfg.provider as string) === 'browser') cfg.provider = 'openrouter'
+      return cfg
     }
   } catch {}
   return DEFAULT_STT_CONFIG
@@ -100,23 +105,112 @@ export function isLikelyQuestion(text: string): boolean {
   return questionStarters.some((prefix) => lower.startsWith(prefix))
 }
 
-export class LiveAudioTranscriber {
-  private mediaStream: MediaStream | null = null
-  private audioContext: AudioContext | null = null
-  private analyser: AnalyserNode | null = null
-  private mediaRecorder: MediaRecorder | null = null
-  private recordedChunks: Blob[] = []
-  private speechRecognition: any = null
+const STT_MODEL_KEY = 'ghost_stt_model'
+export const getStoredSTTModel = (): string => localStorage.getItem(STT_MODEL_KEY) || ''
+export const setStoredSTTModel = (id: string): void => localStorage.setItem(STT_MODEL_KEY, id)
 
-  private isListening = false
-  private isSpeaking = false
+/** Decode a recorded blob and re-encode as 16 kHz mono 16-bit WAV (the format audio-input models accept). */
+async function blobToWavBase64(blob: Blob): Promise<string> {
+  const ctx = new AudioContext({ sampleRate: 16000 })
+  const audio = await ctx.decodeAudioData(await blob.arrayBuffer())
+  await ctx.close()
+  const pcm = audio.getChannelData(0)
+  const buf = new ArrayBuffer(44 + pcm.length * 2)
+  const v = new DataView(buf)
+  const str = (o: number, t: string): void => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)))
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE'); str(12, 'fmt ')
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true)
+  v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true)
+  str(36, 'data'); v.setUint32(40, pcm.length * 2, true)
+  for (let i = 0; i < pcm.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true)
+  let bin = ''
+  const bytes = new Uint8Array(buf)
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
+type Speaker = TranscriptTurn['speaker']
+
+/** One audio source (mic or system output): voice-activity detection + one recording per utterance. */
+class AudioLane {
+  private ctx = new AudioContext()
+  private analyser = this.ctx.createAnalyser()
+  private recorder: MediaRecorder
+  private chunks: Blob[] = []
+  private speaking = false
+  private speechStart = 0
   private silenceTimer: any = null
-  private volumeCheckInterval: any = null
+  private timer: any = null
+
+  constructor(
+    stream: MediaStream,
+    private speaker: Speaker,
+    private onBlob: (blob: Blob, speaker: Speaker) => void,
+    private onVolume: (v: number) => void,
+    private minSilenceMs: number
+  ) {
+    const audioOnly = new MediaStream(stream.getAudioTracks())
+    this.ctx.createMediaStreamSource(audioOnly).connect(this.analyser)
+    this.analyser.fftSize = 512
+    this.recorder = new MediaRecorder(audioOnly, { mimeType: 'audio/webm;codecs=opus' })
+    this.recorder.ondataavailable = (e) => e.data.size > 0 && this.chunks.push(e.data)
+    this.recorder.onstop = () => {
+      const blob = new Blob(this.chunks, { type: 'audio/webm' })
+      this.chunks = []
+      if (blob.size > 8000) this.onBlob(blob, this.speaker)
+    }
+    const bins = new Uint8Array(this.analyser.frequencyBinCount)
+    this.timer = setInterval(() => {
+      this.analyser.getByteFrequencyData(bins)
+      const avg = bins.reduce((a, b) => a + b, 0) / bins.length
+      this.onVolume(Math.min(100, Math.round(avg * 2)))
+      const now = Date.now()
+      if (avg > 20) {
+        if (!this.speaking) {
+          this.speaking = true
+          this.speechStart = now
+          if (this.recorder.state === 'inactive') this.recorder.start(250)
+        }
+        if (this.silenceTimer) {
+          clearTimeout(this.silenceTimer)
+          this.silenceTimer = null
+        }
+        // Long monologue: cut it so the first part gets transcribed without waiting for a pause.
+        if (now - this.speechStart > 15000) this.finish()
+      } else if (this.speaking && !this.silenceTimer) {
+        this.silenceTimer = setTimeout(() => this.finish(), this.minSilenceMs)
+      }
+    }, 100)
+  }
+
+  private finish(): void {
+    this.speaking = false
+    this.silenceTimer = null
+    if (this.recorder.state === 'recording') this.recorder.stop()
+  }
+
+  stop(): void {
+    clearInterval(this.timer)
+    if (this.silenceTimer) clearTimeout(this.silenceTimer)
+    if (this.recorder.state !== 'inactive') {
+      this.recorder.onstop = null
+      this.recorder.stop()
+    }
+    this.ctx.close()
+  }
+}
+
+export class LiveAudioTranscriber {
+  private streams: MediaStream[] = []
+  private lanes: AudioLane[] = []
+  private isListening = false
+  private volumes = [0, 0]
 
   private onTurnTranscribed: (turn: TranscriptTurn) => void
   private onQuestionDetected: (question: string, recentTurns: TranscriptTurn[]) => void
   private onVolumeChange: (volumeLevel: number) => void
   private onInterimText?: (interim: string) => void
+  private onError?: (message: string) => void
 
   private rollingTurns: TranscriptTurn[] = []
   private pendingQuestion: string[] = []
@@ -127,60 +221,69 @@ export class LiveAudioTranscriber {
     onQuestionDetected: (question: string, recentTurns: TranscriptTurn[]) => void
     onVolumeChange: (volumeLevel: number) => void
     onInterimText?: (interim: string) => void
+    onError?: (message: string) => void
   }) {
     this.onTurnTranscribed = callbacks.onTurnTranscribed
     this.onQuestionDetected = callbacks.onQuestionDetected
     this.onVolumeChange = callbacks.onVolumeChange
     this.onInterimText = callbacks.onInterimText
+    this.onError = callbacks.onError
   }
 
   public async startListening(): Promise<void> {
     if (this.isListening) return
-
     const config = getStoredSTTConfig()
+    this.isListening = true
 
+    // System audio = the interviewer (macOS loopback, handled by the main process). Mic = you.
+    let system: MediaStream | null = null
     try {
-      // 1. If using Web Speech API in browser/Electron
-      if (
-        config.provider === 'browser' &&
-        typeof ((window as any).webkitSpeechRecognition || (window as any).SpeechRecognition) !==
-          'undefined'
-      ) {
-        this.setupBrowserRecognition()
-      }
+      const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true })
+      display.getVideoTracks().forEach((t) => t.stop())
+      if (display.getAudioTracks().length > 0) system = display
+    } catch (e) {
+      console.warn('System audio capture unavailable:', e)
+    }
 
-      // 2. Setup Audio Stream for VAD analysis and Whisper fallback
-      const audioConstraints: MediaTrackConstraints = {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-      if (config.audioDeviceId) {
-        audioConstraints.deviceId = { exact: config.audioDeviceId }
-      }
-
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: audioConstraints
+    let mic: MediaStream | null = null
+    try {
+      mic = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          ...(config.audioDeviceId ? { deviceId: { exact: config.audioDeviceId } } : {})
+        }
       })
+    } catch (e) {
+      console.warn('Mic unavailable:', e)
+    }
 
-      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-      const source = this.audioContext.createMediaStreamSource(this.mediaStream)
-      this.analyser = this.audioContext.createAnalyser()
-      this.analyser.fftSize = 512
-      source.connect(this.analyser)
+    if (!system && !mic) {
+      this.isListening = false
+      throw new Error('No audio source. Allow Microphone and Screen Recording for Ghost in macOS System Settings.')
+    }
+    if (!system) {
+      this.onError?.('Interviewer audio not captured (allow Screen Recording). Listening to the mic only.')
+    }
 
-      this.isListening = true
-
-      // If not browser recognition, run VAD + MediaRecorder loop for Groq/OpenAI
-      if (config.provider !== 'browser') {
-        this.setupRecorder()
-      }
-      this.startVADLoop()
-    } catch (err) {
-      console.error('Failed to initialize audio capture:', err)
-      throw new Error(
-        'Could not access audio stream. Please grant Microphone permissions in macOS System Settings.'
-      )
+    const onBlob = (blob: Blob, speaker: Speaker): void => void this.processSpeechAudio(blob, speaker)
+    const vol = (i: number) => (v: number) => {
+      this.volumes[i] = v
+      this.onVolumeChange(Math.max(...this.volumes))
+    }
+    const silence = Math.min(config.minSilenceMs || 800, 800)
+    if (system) {
+      this.streams.push(system)
+      this.lanes.push(new AudioLane(system, 'Interviewer', onBlob, vol(0), silence))
+    }
+    // With system audio we hear the interviewer directly, so the mic is not transcribed (saves cost and
+    // stops your own voice and room noise reaching the model). Without it, the mic is the only source.
+    if (mic && !system) {
+      this.streams.push(mic)
+      this.lanes.push(new AudioLane(mic, 'Interviewer', onBlob, vol(1), silence))
+    } else {
+      mic?.getTracks().forEach((t) => t.stop())
     }
   }
 
@@ -189,207 +292,37 @@ export class LiveAudioTranscriber {
     if (this.questionTimer) clearTimeout(this.questionTimer)
     this.questionTimer = null
     this.pendingQuestion = []
-
-    if (this.speechRecognition) {
-      try {
-        this.speechRecognition.stop()
-      } catch {}
-      this.speechRecognition = null
-    }
-
-    if (this.volumeCheckInterval) {
-      clearInterval(this.volumeCheckInterval)
-      this.volumeCheckInterval = null
-    }
-
-    if (this.silenceTimer) {
-      clearTimeout(this.silenceTimer)
-      this.silenceTimer = null
-    }
-
-    if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      try {
-        this.mediaRecorder.stop()
-      } catch {}
-    }
-
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((t) => t.stop())
-      this.mediaStream = null
-    }
-
-    if (this.audioContext) {
-      this.audioContext.close()
-      this.audioContext = null
-    }
+    this.lanes.forEach((l) => l.stop())
+    this.lanes = []
+    this.streams.forEach((s) => s.getTracks().forEach((t) => t.stop()))
+    this.streams = []
   }
 
-  private setupBrowserRecognition(): void {
-    const SpeechClass =
-      (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition
-    if (!SpeechClass) return
-
-    try {
-      this.speechRecognition = new SpeechClass()
-      this.speechRecognition.continuous = true
-      this.speechRecognition.interimResults = true
-      this.speechRecognition.lang = 'en-US'
-
-      this.speechRecognition.onresult = (event: any) => {
-        let interimText = ''
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i]
-          const transcript = res[0].transcript
-          if (res.isFinal) {
-            const cleanText = transcript.trim()
-            if (cleanText.length > 2) {
-              this.handleFinalTranscript(cleanText)
-            }
-          } else {
-            interimText += transcript
-          }
-        }
-        if (interimText && this.onInterimText) {
-          this.onInterimText(interimText.trim())
-        }
-      }
-
-      this.speechRecognition.onerror = (e: any) => {
-        console.warn('SpeechRecognition error:', e.error)
-        // If network error in electron offline, can fallback to Groq if key exists
-        if (e.error === 'network') {
-          console.log('Web speech network unavailable, fallback to Groq/VAD')
-        }
-      }
-
-      this.speechRecognition.onend = () => {
-        // Auto restart if still listening
-        if (this.isListening) {
-          try {
-            this.speechRecognition.start()
-          } catch {}
-        }
-      }
-
-      this.speechRecognition.start()
-    } catch (e) {
-      console.warn('Could not start webkitSpeechRecognition:', e)
-    }
-  }
-
-  private setupRecorder(): void {
-    if (!this.mediaStream) return
-
-    try {
-      this.mediaRecorder = new MediaRecorder(this.mediaStream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-          ? 'audio/webm;codecs=opus'
-          : 'audio/webm'
-      })
-
-      this.recordedChunks = []
-      this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          this.recordedChunks.push(e.data)
-        }
-      }
-
-      this.mediaRecorder.onstop = async () => {
-        if (this.recordedChunks.length === 0) return
-        const audioBlob = new Blob(this.recordedChunks, { type: 'audio/webm' })
-        this.recordedChunks = []
-
-        // Transcribe speech chunk
-        await this.processSpeechAudio(audioBlob)
-      }
-    } catch (e) {
-      console.warn('MediaRecorder setup error:', e)
-    }
-  }
-
-  private startVADLoop(): void {
-    const dataArray = new Uint8Array(this.analyser?.frequencyBinCount || 256)
-    const SPEECH_THRESHOLD = 16 // RMS volume threshold
-    const config = getStoredSTTConfig()
-
-    this.volumeCheckInterval = setInterval(() => {
-      if (!this.analyser || !this.isListening) return
-
-      this.analyser.getByteFrequencyData(dataArray)
-      let sum = 0
-      for (let i = 0; i < dataArray.length; i++) {
-        sum += dataArray[i]
-      }
-      const avgVolume = sum / dataArray.length
-      this.onVolumeChange(Math.min(100, Math.round(avgVolume * 2)))
-
-      if (config.provider === 'browser') {
-        // Handled by webkitSpeechRecognition
-        return
-      }
-
-      if (avgVolume > SPEECH_THRESHOLD) {
-        // Speech detected
-        if (!this.isSpeaking) {
-          this.isSpeaking = true
-          if (this.mediaRecorder && this.mediaRecorder.state === 'inactive') {
-            this.recordedChunks = []
-            this.mediaRecorder.start(250)
-          }
-        }
-
-        // Reset silence countdown timer
-        if (this.silenceTimer) {
-          clearTimeout(this.silenceTimer)
-          this.silenceTimer = null
-        }
-      } else if (this.isSpeaking && !this.silenceTimer) {
-        // Speaker paused: start silence timer
-        this.silenceTimer = setTimeout(() => {
-          this.isSpeaking = false
-          this.silenceTimer = null
-
-          if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-            this.mediaRecorder.stop()
-          }
-        }, config.minSilenceMs || 1200)
-      }
-    }, 100)
-  }
-
-  private handleFinalTranscript(cleanText: string): void {
+  private handleFinalTranscript(cleanText: string, speaker: Speaker): void {
     // Ignore common low-energy hallucinations
-    const junkStrings = ['thank you', 'thanks for watching', 'you', 'subscribe', 'bye', 'amara.org']
-    if (junkStrings.includes(cleanText.toLowerCase().replace(/[.,!]/g, ''))) {
-      return
-    }
+    const junk = ['thank you', 'thanks for watching', 'you', 'subscribe', 'bye', 'amara.org', 'no speech', 'silence']
+    const norm = cleanText.toLowerCase().replace(/[.,!\[\]()]/g, '').trim()
+    if (junk.includes(norm) || /^\[.*\]$/.test(cleanText.trim())) return
 
     const config = getStoredSTTConfig()
-    const isQuestion = isLikelyQuestion(cleanText)
+    const isQuestion = speaker === 'Interviewer' && isLikelyQuestion(cleanText)
 
     const turn: TranscriptTurn = {
       id: `${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      speaker: 'Interviewer',
+      speaker,
       text: cleanText,
       timestamp: Date.now(),
       isQuestion
     }
-
     this.rollingTurns.push(turn)
-    if (this.rollingTurns.length > 25) {
-      this.rollingTurns.shift()
-    }
-
+    if (this.rollingTurns.length > 25) this.rollingTurns.shift()
     this.onTurnTranscribed(turn)
 
-    // Clear interim text
-    if (this.onInterimText) {
-      this.onInterimText('')
-    }
+    // Only the interviewer's speech can trigger an answer.
+    if (speaker !== 'Interviewer' || !config.autoAnswerOnQuestion) return
 
-    // AUTO-ANSWER TRIGGER: If interviewer asked a question and autoAnswer is ON
     // Speech engines split one question into several finals; wait for a pause and answer the whole thing once.
-    if (config.autoAnswerOnQuestion && (isQuestion || cleanText.split(/\s+/).length >= 8)) {
+    if (isQuestion || cleanText.split(/\s+/).length >= 8) {
       this.pendingQuestion.push(cleanText)
       if (this.questionTimer) clearTimeout(this.questionTimer)
       this.questionTimer = setTimeout(() => {
@@ -397,19 +330,16 @@ export class LiveAudioTranscriber {
         this.pendingQuestion = []
         this.questionTimer = null
         this.onQuestionDetected(question, [...this.rollingTurns])
-      }, 1500)
+      }, 400)
     } else if (this.questionTimer) {
-      // Interviewer kept talking after the question (follow-on detail): fold it in.
       this.pendingQuestion.push(cleanText)
     }
   }
 
-  private async processSpeechAudio(blob: Blob): Promise<void> {
-    if (blob.size < 1200) return // Skip tiny clicks/coughs
-
+  private async processSpeechAudio(blob: Blob, speaker: Speaker): Promise<void> {
     const config = getStoredSTTConfig()
     let text = ''
-
+    this.onInterimText?.('transcribing')
     try {
       if (config.provider === 'groq' && config.groqApiKey) {
         text = await this.transcribeWithGroq(blob, config.groqApiKey)
@@ -418,16 +348,43 @@ export class LiveAudioTranscriber {
       } else if (config.provider === 'local') {
         text = await this.transcribeWithLocal(blob, config.localEndpoint)
       } else {
-        return
+        text = await this.transcribeWithOpenRouter(blob)
       }
-
       const cleanText = text.trim()
-      if (!cleanText || cleanText.length < 3) return
-
-      this.handleFinalTranscript(cleanText)
-    } catch (e) {
+      if (cleanText.length >= 3) this.handleFinalTranscript(cleanText, speaker)
+    } catch (e: any) {
       console.error('Transcription error:', e)
+      this.onError?.(`Speech-to-text failed: ${e?.message || e}`)
+    } finally {
+      this.onInterimText?.('')
     }
+  }
+
+  private async transcribeWithOpenRouter(blob: Blob): Promise<string> {
+    const apiKey = getStoredApiKey()
+    const model = getStoredSTTModel()
+    if (!apiKey) throw new Error('add your OpenRouter key in Settings')
+    if (!model) throw new Error('no audio-capable model found on your OpenRouter account; pick Groq or OpenAI in Settings > Audio')
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json', 'X-Title': 'ghost' },
+      body: JSON.stringify({
+        model,
+        max_tokens: 300,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Transcribe the clearly spoken human speech in this audio verbatim. Output only the words. If it is music, noise, a notification sound or unclear, output nothing.' },
+              { type: 'input_audio', input_audio: { data: await blobToWavBase64(blob), format: 'wav' } }
+            ]
+          }
+        ]
+      })
+    })
+    if (!response.ok) throw new Error(`${response.status} ${(await response.text()).slice(0, 160)}`)
+    const data = await response.json()
+    return data.choices?.[0]?.message?.content || ''
   }
 
   private async transcribeWithGroq(blob: Blob, apiKey: string): Promise<string> {

@@ -340,10 +340,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <label className="field-label">Speech-to-Text Engine</label>
                   <div className="modes-tab-bar mini">
                     <button
-                      className={`mode-tab-btn ${sttConfig.provider === 'browser' ? 'active' : ''}`}
-                      onClick={() => setSttConfig((prev) => ({ ...prev, provider: 'browser' }))}
+                      className={`mode-tab-btn ${sttConfig.provider === 'openrouter' ? 'active' : ''}`}
+                      onClick={() => setSttConfig((prev) => ({ ...prev, provider: 'openrouter' }))}
                     >
-                      Web Speech (Built-in)
+                      OpenRouter (no extra key)
                     </button>
                     <button
                       className={`mode-tab-btn ${sttConfig.provider === 'groq' ? 'active' : ''}`}
@@ -366,10 +366,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
-                {sttConfig.provider === 'browser' && (
+                {sttConfig.provider === 'openrouter' && (
                   <div className="field-group">
                     <span className="hint-text">
-                      Uses built-in speech recognition with instant streaming transcription. No external keys required.
+                      Uses an audio-capable model from your OpenRouter account, so no extra key. Groq is faster and free if you want lower latency.
                     </span>
                   </div>
                 )}
