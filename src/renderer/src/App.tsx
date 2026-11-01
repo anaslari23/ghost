@@ -81,6 +81,8 @@ export const App: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null)
   const answerBoxRef = useRef<HTMLDivElement>(null)
   const transcriberRef = useRef<LiveAudioTranscriber | null>(null)
+  const recentTurnsRef = useRef<TranscriptTurn[]>([])
+  recentTurnsRef.current = recentTurns
   const lastAutoAnswerTimeRef = useRef<number>(0)
 
   // Keep refs in sync for callback closures
@@ -194,6 +196,7 @@ export const App: React.FC = () => {
       abortControllerRef.current = abortController
 
       setStatus('thinking')
+      setDetectedQuestion(null)
       setErrorMessage(null)
       setAnswer('')
       setLastHotkey('Generating')
@@ -217,35 +220,24 @@ export const App: React.FC = () => {
 ${docContext}
 Answer in the first person, concise enough to speak aloud. Ground any claim about the user's background strictly in the documents above; never invent employers, degrees or metrics.`
 
-        // 3. Prepare user prompt combining interviewer's speech & visual screen
+        // 3. Prepare user prompt: only fresh speech, only the question being answered
+        const now = Date.now()
+        const live = (turnsOverride || recentTurnsRef.current).filter((t) => now - t.timestamp < 120_000)
         const targetQuestion =
-          questionOverride ||
-          detectedQuestion ||
-          (recentTurns.slice().reverse().find((t) => t.isQuestion)?.text) ||
-          ''
-
-        const historyTurns = turnsOverride || recentTurns
+          questionOverride || live.slice().reverse().find((t) => t.isQuestion)?.text || ''
+        const context = live.filter((t) => !targetQuestion.includes(t.text)).slice(-3)
 
         let userPrompt = ''
-        if (targetQuestion) {
-          userPrompt += `CURRENT INTERVIEWER QUESTION:\n"${targetQuestion}"\n\n`
+        if (context.length > 0) {
+          userPrompt += `RECENT SPEECH (speech-to-text, may contain errors; background only):\n${context.map((t) => t.text).join('\n')}\n\n`
         }
-
-        if (historyTurns.length > 0) {
-          userPrompt += `RECENT CONVERSATION CONTEXT:\n`
-          userPrompt += historyTurns
-            .slice(-4)
-            .map((t) => `${t.speaker}: ${t.text}`)
-            .join('\n')
-          userPrompt += `\n\n`
-        }
-
+        userPrompt += targetQuestion
+          ? `QUESTION TO ANSWER:\n"${targetQuestion}"\n\n`
+          : `No question was detected in the last two minutes.\n\n`
         if (screenshotBase64) {
-          userPrompt += `VISUAL SCREEN CONTEXT:\nA screenshot of the candidate's active display (coding challenge, presentation slides, or meeting window) is attached.\n\n`
+          userPrompt += `A screenshot of the screen is attached. Use it only if the question refers to it.\n\n`
         }
-
-        userPrompt += `TASK:\n`
-        userPrompt += `Synthesize what the interviewer asked and what is visible on screen. Provide the optimal interview answer immediately, strictly grounded in the candidate's resume.`
+        userPrompt += `Answer only the question above. Use the documents only for facts about the user's own background, and only when relevant; with no documents, never invent personal experience, answer in general terms. If the question is missing or unclear, say so in one line and ask what to answer instead of guessing.`
 
         if (customPromptExtension) {
           userPrompt += `\nSPECIAL FORMATTING INSTRUCTION: ${customPromptExtension}`
@@ -282,8 +274,11 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         }
       }
     },
-    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs, detectedQuestion, recentTurns]
+    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs]
   )
+
+  const handleAskRef = useRef(handleAsk)
+  handleAskRef.current = handleAsk
 
   // Initialize Live Audio Transcriber and auto-answer loop
   useEffect(() => {
@@ -300,7 +295,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
           const now = Date.now()
           if (now - lastAutoAnswerTimeRef.current > 5000) {
             lastAutoAnswerTimeRef.current = now
-            handleAsk(undefined, question, turns)
+            handleAskRef.current(undefined, question, turns)
           }
         }
       },
@@ -324,7 +319,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
       transcriber.stopListening()
       transcriberRef.current = null
     }
-  }, [handleAsk, isListening])
+  }, [isListening])
 
   const toggleListening = useCallback(() => {
     setIsListening((prev) => {
