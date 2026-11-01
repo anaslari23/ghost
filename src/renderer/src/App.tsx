@@ -9,7 +9,6 @@ import {
   Check,
   Maximize2, MousePointer2,
   Minimize2,
-  Shield,
   Trash2,
   ChevronDown,
   ChevronUp
@@ -52,7 +51,7 @@ export const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState<AppMode>(getStoredActiveMode)
   const [status, setStatus] = useState<AppStatus>('idle')
   const [answer, setAnswer] = useState<string>('')
-  const [lastHotkey, setLastHotkey] = useState<string | null>(null)
+  const [, setLastHotkey] = useState<string | null>(null)
   const [copiedAll, setCopiedAll] = useState<boolean>(false)
 
   // Live Audio & Real-time Conversation State
@@ -63,7 +62,7 @@ export const App: React.FC = () => {
   const [audioVolume, setAudioVolume] = useState<number>(0)
   const [recentTurns, setRecentTurns] = useState<TranscriptTurn[]>([])
   const [interimSpeech, setInterimSpeech] = useState<string>('')
-  const [detectedQuestion, setDetectedQuestion] = useState<string | null>(null)
+  const [, setDetectedQuestion] = useState<string | null>(null)
   const [showConversationDrawer, setShowConversationDrawer] = useState<boolean>(false)
 
   // Modals
@@ -499,14 +498,49 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             <span className="brand-name">GHOST</span>
           </div>
 
-          <div className="shield-tag" title="Hidden from screen recording & video calls">
-            <Shield size={10} className="shield-icon" />
-          </div>
+            <button
+              className="model-tag-pill"
+              onClick={() => setIsSettingsOpen(true)}
+              title={`Active Model: ${activeConfig.model}. Click to swap.`}
+            >
+              <span>{activeConfig.model.split('/').pop() || activeConfig.model}</span>
+              
+            </button>
+            <span
+              className={`status-pill-state ${
+                status === 'error'
+                  ? 'error'
+                  : status === 'streaming'
+                  ? 'streaming'
+                  : status === 'thinking'
+                  ? 'thinking'
+                  : isPaused
+                  ? 'paused'
+                  : 'ready'
+              }`}
+            >
+              {status === 'thinking'
+                ? 'Thinking'
+                : status === 'streaming'
+                ? 'Answering'
+                : status === 'error'
+                ? 'Error'
+                : isPaused
+                ? 'Paused'
+                : ''}
+            </span>
+
 
         </div>
 
         {/* Header Right Action Group */}
         <div className="header-right">
+          {answer && (
+            <button className="tool-icon-btn" onClick={handleCopyAll} title="Copy answer">
+              {copiedAll ? <Check size={12} /> : <Copy size={12} />}
+            </button>
+          )}
+
           {/* Document Grounding Pill */}
           <button
             className={`tool-pill ${activeModeDocs.length > 0 ? 'highlight-doc' : ''}`}
@@ -592,13 +626,11 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
       </div>
 
       {/* Live Conversation Transcript Feed */}
+      {(latestTurn || interimSpeech) && (
       <div className="live-transcript-feed">
         <div className="transcript-meta-lane">
           <div className="transcript-live-tag">
-            <span className={`live-mic-dot ${isListening ? 'active' : ''}`} />
-            <span className="live-label">
-              {interimSpeech ? 'Speaking' : latestTurn ? latestTurn.speaker : 'Listening'}
-            </span>
+            <span className="live-label">{latestTurn && !interimSpeech ? latestTurn.speaker : 'Heard'}</span>
           </div>
 
           <div className="transcript-content-text">
@@ -608,20 +640,10 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
               <span className={latestTurn.isQuestion ? 'question-text' : 'normal-text'}>
                 "{latestTurn.text}"
               </span>
-            ) : isListening ? (
-              <span className="transcript-empty-hint">
-                Listening to conversation... Answers auto-generate when questions are asked.
-              </span>
             ) : (
-              <span className="transcript-empty-hint">Microphone monitoring paused.</span>
+              <span className="transcript-empty-hint">{isListening ? '...' : 'Mic off'}</span>
             )}
           </div>
-
-          {detectedQuestion && (
-            <div className="question-detected-pill" onClick={() => handleAsk(undefined, detectedQuestion)}>
-              <span>Question Detected</span>
-            </div>
-          )}
 
           {recentTurns.length > 0 && (
             <button
@@ -630,7 +652,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
               title="Toggle transcript history"
             >
               {showConversationDrawer ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
-              <span>{recentTurns.length} turns</span>
+              <span>{recentTurns.length}</span>
             </button>
           )}
         </div>
@@ -648,74 +670,10 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         )}
       </div>
 
+      )}
+
       {/* Overlay Body */}
       <div className="overlay-body">
-        {/* Status & Model Bar */}
-        <div className="status-ribbon">
-          <div className="status-info">
-            <span
-              className={`status-pill-state ${
-                status === 'error'
-                  ? 'error'
-                  : status === 'streaming'
-                  ? 'streaming'
-                  : status === 'thinking'
-                  ? 'thinking'
-                  : isPaused
-                  ? 'paused'
-                  : 'ready'
-              }`}
-            >
-              {status === 'thinking'
-                ? 'Snapping screen & synthesizing...'
-                : status === 'streaming'
-                ? 'Streaming answer...'
-                : status === 'error'
-                ? 'Provider Error'
-                : isPaused
-                ? 'Paused'
-                : 'Ready'}
-            </span>
-          </div>
-
-          <div className="status-actions">
-            {activeModeDocs.length > 0 ? (
-              <span
-                className="cv-grounded-pill"
-                onClick={() => setIsDocsOpen(true)}
-                title={activeModeDocs.map((d) => d.name).join(', ')}
-              >
-                <Check size={10} />
-                <span>Strictly Bounded: {activeModeDocs[0].name}</span>
-              </span>
-            ) : (
-              <span className="cv-unattached-pill" onClick={() => setIsDocsOpen(true)}>
-                <span>No CV Attached (Drop here)</span>
-              </span>
-            )}
-
-            <button
-              className="model-tag-pill"
-              onClick={() => setIsSettingsOpen(true)}
-              title={`Active Model: ${activeConfig.model}. Click to swap.`}
-            >
-              <span>{activeConfig.model.split('/').pop() || activeConfig.model}</span>
-              <span className="arrow-down">▾</span>
-            </button>
-
-            {answer && (
-              <button
-                className="copy-answer-pill"
-                onClick={handleCopyAll}
-                title="Copy entire answer to clipboard"
-              >
-                {copiedAll ? <Check size={11} /> : <Copy size={11} />}
-                <span>{copiedAll ? 'Copied' : 'Copy'}</span>
-              </button>
-            )}
-          </div>
-        </div>
-
         {/* Content Box */}
         <div className="content-box" ref={answerBoxRef}>
           {errorMessage && (
@@ -734,55 +692,28 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             <FormattedAnswer content={answer} isStreaming={status === 'streaming'} />
           ) : (
             !errorMessage && (
-              <div className="welcome-placeholder">
-                <div className="placeholder-headline">
-                  <span>Listening to interview audio & observing screen.</span>
-                </div>
-                <div className="placeholder-feature-grid">
-                  <div className="feature-item">
-                    <div className="feature-title">Real-time Audio Alignment</div>
-                    <div className="feature-desc">
-                      Automatically detects when the interviewer asks a question and generates an immediate response.
-                    </div>
-                  </div>
-                  <div className="feature-item">
-                    <div className="feature-title">Strict Document Grounding</div>
-                    <div className="feature-desc">
-                      {activeModeDocs.length > 0
-                        ? `Bounded by ${activeModeDocs[0].name}. Personal answers stay 100% faithful to your resume.`
-                        : 'Drop your CV or prep notes here to enforce strict resume boundaries.'}
-                    </div>
-                  </div>
-                  <div className="feature-item">
-                    <div className="feature-title">Invisible & Secure</div>
-                    <div className="feature-desc">
-                      Protected from screen shares, recording software, and window captures.
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <div className="empty-hint">{isLive ? 'Listening' : 'Paused'}</div>
             )
           )}
         </div>
 
-        {/* Typed follow-up on the current answer */}
-        {answer && status !== 'thinking' && status !== 'streaming' && (
+        {/* Typed question / follow-up: available whenever Ghost is running */}
+        {isLive && (
           <input
             className="followup-input"
-            placeholder="Follow-up… (Enter)"
+            placeholder={answer ? 'Follow-up… (Enter)' : 'Type a question… (Enter)'}
             onKeyDown={(e) => {
               const text = e.currentTarget.value.trim()
               if (e.key !== 'Enter' || !text) return
               e.currentTarget.value = ''
-              handleAsk(`The user is asking a follow-up about your previous answer. Previous answer:\n${answer.slice(0, 1500)}`, text)
+              handleAsk('This was typed by the user. Use the earlier conversation for context.', text)
             }}
           />
         )}
 
         {/* Quick Interview Format Chips */}
-        {activeMode === 'interview' && (
+        {activeMode === 'interview' && answer && status === 'idle' && (
           <div className="interview-quick-bar">
-            <span className="quick-label">Format:</span>
             <button
               className="quick-chip"
               onClick={() => handleAsk('Provide only the direct 1-2 sentence core answer first.')}
@@ -815,36 +746,6 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             </button>
           </div>
         )}
-      </div>
-
-      {/* Overlay Footer */}
-      <div className="overlay-footer">
-        <div className="shortcut-group">
-          <div className="shortcut-item" onClick={() => handleAsk()} style={{ cursor: 'pointer' }}>
-            <span className="kbd">⌘↵</span>
-            <span>Ask Screen & Audio</span>
-          </div>
-          {status === 'streaming' || status === 'thinking' ? (
-            <div className="shortcut-item stop-item" onClick={handleStop} style={{ cursor: 'pointer' }}>
-              <span className="kbd stop">Esc</span>
-              <span className="stop-text">Stop</span>
-            </div>
-          ) : (
-            <div className="shortcut-item" onClick={handleClear} style={{ cursor: 'pointer' }}>
-              <span className="kbd">⌘⇧⌫</span>
-              <span>Clear</span>
-            </div>
-          )}
-          <div className="shortcut-item" onClick={() => setIsDocsOpen(true)} style={{ cursor: 'pointer' }}>
-            <span className="kbd">CV</span>
-            <span>Documents</span>
-          </div>
-          <div className="shortcut-item">
-            <span className="kbd">⌘↑↓←→</span>
-            <span>Move</span>
-          </div>
-        </div>
-        {lastHotkey && <div className="last-hotkey-badge">{lastHotkey}</div>}
       </div>
 
       {/* Settings & Model Catalog Modal */}
