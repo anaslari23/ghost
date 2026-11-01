@@ -123,12 +123,22 @@ export function setStoredModel(id: string): void {
   } catch {}
 }
 
-// One model for every mode. Default: cheapest paid model with a decent context window
-// (free models get rate-limited mid-conversation); falls back to the first free one.
-function pickDefaultModel(list: OpenRouterModel[]): string {
-  const paid = list.filter((m) => !m.isFree && m.contextLength >= 32000)
-  paid.sort((a, b) => a.promptPricePerMillion + a.completionPricePerMillion - (b.promptPricePerMillion + b.completionPricePerMillion))
-  return (paid[0] || list[0])?.id || ''
+// Not real chat models: routers (negative price), summarizers, extractors.
+const JUNK = /router|auto|summar|extract|embed|guard|moderation/i
+const usable = (m: any): boolean =>
+  parseFloat(m?.pricing?.prompt || '0') >= 0 && parseFloat(m?.pricing?.completion || '0') >= 0 && !JUNK.test(m.id)
+
+// First preference that matches wins; within a preference the newest model. Falls back to the cheapest real paid model.
+function pickBest(list: any[], prefs: RegExp[]): string {
+  const ok = list.filter((m) => usable(m) && (m.context_length || 0) >= 32000)
+  const newest = (a: any, b: any): number => (b.created || 0) - (a.created || 0)
+  for (const re of prefs) {
+    const hit = ok.filter((m) => re.test(m.id) && !/image|lite|thinking|:free/i.test(m.id)).sort(newest)[0]
+    if (hit) return hit.id
+  }
+  const paid = ok.filter((m) => parseFloat(m.pricing.prompt) > 0 && parseFloat(m.pricing.completion) > 0)
+  paid.sort((a, b) => parseFloat(a.pricing.prompt) - parseFloat(b.pricing.prompt))
+  return (paid[0] || ok[0])?.id || ''
 }
 
 export function getCachedModels(): OpenRouterModel[] {
@@ -175,8 +185,17 @@ export async function fetchOpenRouterModels(apiKey?: string): Promise<OpenRouter
   const data = await response.json()
   const rawList = Array.isArray(data?.data) ? data.data : []
 
+  // Speech-to-text model: audio-input, text-output; a fast Flash-class model by default.
+  const audio = rawList.filter(
+    (m: any) => (m?.architecture?.input_modalities || []).includes('audio') && (m?.architecture?.output_modalities || ['text']).includes('text')
+  )
+  try {
+    localStorage.setItem('ghost_stt_model', pickBest(audio, [/gemini.*flash/i, /gpt.*audio.*mini|gpt.*mini/i, /voxtral/i]))
+  } catch {}
+
   // Eligible = takes text + screenshot in, streams text out, and has room for a CV + transcript.
   const eligible = rawList.filter((m: any) => {
+    if (!usable(m)) return false
     const input: string[] = m?.architecture?.input_modalities || []
     const output: string[] = m?.architecture?.output_modalities || ['text']
     return (
@@ -211,8 +230,10 @@ export async function fetchOpenRouterModels(apiKey?: string): Promise<OpenRouter
 
   // Cache models locally for instant offline loading
   setCachedModels(parsed)
-  if (!parsed.some((m: OpenRouterModel) => m.id === getStoredModel())) {
-    setStoredModel(pickDefaultModel(parsed))
+  const stored = getStoredModel()
+  const storedRaw = eligible.find((m: any) => m.id === stored)
+  if (!storedRaw || !usable(storedRaw)) {
+    setStoredModel(pickBest(eligible, [/claude.*haiku/i, /gemini.*flash/i, /gpt.*mini/i, /claude.*sonnet/i]))
   }
 
   return parsed
@@ -268,7 +289,7 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
     body: JSON.stringify({
       model,
       stream: true,
-      max_tokens: 1000, // answers are spoken aloud; also caps reasoning-model spend
+      max_tokens: 1500, // answers are spoken aloud; also caps reasoning-model spend
       reasoning: { effort: 'low' },
       provider: {
         allow_fallbacks: true
