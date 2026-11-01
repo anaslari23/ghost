@@ -389,7 +389,7 @@ export class LiveAudioTranscriber {
 
     // AUTO-ANSWER TRIGGER: If interviewer asked a question and autoAnswer is ON
     // Speech engines split one question into several finals; wait for a pause and answer the whole thing once.
-    if (config.autoAnswerOnQuestion && isQuestion) {
+    if (config.autoAnswerOnQuestion && (isQuestion || cleanText.split(/\s+/).length >= 8)) {
       this.pendingQuestion.push(cleanText)
       if (this.questionTimer) clearTimeout(this.questionTimer)
       this.questionTimer = setTimeout(() => {

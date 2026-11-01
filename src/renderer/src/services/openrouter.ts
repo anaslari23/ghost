@@ -224,13 +224,13 @@ export interface StreamChatOptions {
   systemPrompt: string
   userPrompt: string
   screenshotBase64?: string
-  isVisionModel?: boolean
+  history?: { role: 'user' | 'assistant'; content: string }[]
   onDelta: (token: string) => void
   signal?: AbortSignal
 }
 
 export async function streamOpenRouterChat(options: StreamChatOptions): Promise<void> {
-  const { apiKey, model, systemPrompt, userPrompt, screenshotBase64, isVisionModel = true, onDelta, signal } = options
+  const { apiKey, model, systemPrompt, userPrompt, screenshotBase64, history = [], onDelta, signal } = options
 
   if (!apiKey) {
     throw new Error('Please set your OpenRouter API key in Settings first.')
@@ -242,7 +242,7 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
   const userContentParts: any[] = [{ type: 'text', text: userPrompt }]
 
   // Only attach screenshot if screenshot is present and model supports vision
-  if (screenshotBase64 && isVisionModel) {
+  if (screenshotBase64) {
     userContentParts.push({
       type: 'image_url',
       image_url: {
@@ -253,6 +253,7 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
 
   const messages = [
     { role: 'system', content: systemPrompt },
+    ...history,
     { role: 'user', content: userContentParts }
   ]
 
