@@ -51,6 +51,13 @@ export const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState<AppMode>(getStoredActiveMode)
   const [status, setStatus] = useState<AppStatus>('idle')
   const [answer, setAnswer] = useState<string>('')
+  // Earlier answers stay above the newest one, chat-style.
+  const [thread, setThread] = useState<{ id: number; q: string; a: string }[]>([])
+  const [currentQ, setCurrentQ] = useState<string>('')
+  const answerRef = useRef('')
+  answerRef.current = answer
+  const currentQRef = useRef('')
+  currentQRef.current = currentQ
   const [, setLastHotkey] = useState<string | null>(null)
   const [copiedAll, setCopiedAll] = useState<boolean>(false)
 
@@ -104,8 +111,8 @@ export const App: React.FC = () => {
 
   // Filter docs for current mode
   const activeModeDocs = useMemo(() => {
-    return documents.filter((d) => d.mode === 'all' || d.mode === activeMode)
-  }, [documents, activeMode])
+    return documents // a CV applies to every mode
+  }, [documents])
 
 
   // Hover management for click-through
@@ -155,6 +162,8 @@ export const App: React.FC = () => {
       abortControllerRef.current = null
     }
     setAnswer('')
+    setCurrentQ('')
+    setThread([])
     setErrorMessage(null)
     setStatus('idle')
     setLastHotkey('Cleared')
@@ -166,6 +175,15 @@ export const App: React.FC = () => {
     setCopiedAll(true)
     setTimeout(() => setCopiedAll(false), 2000)
   }, [answer])
+
+  // Move the visible answer into the thread so the next one appears below it.
+  const archiveAnswer = useCallback(() => {
+    const a = answerRef.current
+    if (!a.trim()) return
+    const item = { id: Date.now(), q: currentQRef.current, a }
+    setThread((prev) => [...prev, item].slice(-20))
+    setAnswer('')
+  }, [])
 
   // ASK: capture screen + interviewer question + attach CV documents + stream response
   const handleAsk = useCallback(
@@ -196,7 +214,7 @@ export const App: React.FC = () => {
       setStatus('thinking')
       setDetectedQuestion(null)
       setErrorMessage(null)
-      if (!turnsOverride) setAnswer('') // auto-answers keep the old answer on screen until a real one starts
+      if (!turnsOverride) archiveAnswer() // auto-answers leave the old answer in place until a real one starts
       setLastHotkey('Generating')
 
       try {
@@ -216,7 +234,7 @@ export const App: React.FC = () => {
         const docContext = formatDocumentsPromptContext(activeModeDocs)
         const combinedSystemPrompt = `${activeConfig.systemPrompt}
 ${docContext}
-Answer in the first person, concise enough to speak aloud. Ground any claim about the user's background strictly in the documents above; never invent employers, degrees or metrics.${
+Answer in the first person, concise enough to speak aloud. When the question is about the user's experience, projects, skills or background, answer from the documents above, as the user, with specifics (names, numbers). Never invent employers, degrees or metrics that are not in them.${
           turnsOverride
             ? '\nYou are listening live. If the latest speech does not need an answer (small talk, filler, the user talking, a statement with no question or request), reply with exactly NO_ANSWER and nothing else.'
             : ''
@@ -246,6 +264,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         }
 
         const gated = !!turnsOverride
+        if (!gated) setCurrentQ(targetQuestion)
         let full = ''
         let released = !gated
         let silent = false
@@ -274,12 +293,11 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
                 return
               }
               released = true
+              archiveAnswer()
+              setCurrentQ(targetQuestion)
             }
             if (silent) return
             setAnswer(full)
-            if (answerBoxRef.current) {
-              answerBoxRef.current.scrollTop = answerBoxRef.current.scrollHeight
-            }
           },
           signal: abortController.signal
         })
@@ -301,8 +319,13 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         }
       }
     },
-    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs]
+    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs, archiveAnswer]
   )
+
+  // A new answer starts at the top of the view, so the first words are readable while it streams.
+  useEffect(() => {
+    answerBoxRef.current?.querySelector('.thread-item.current')?.scrollIntoView({ block: 'start' })
+  }, [thread.length, currentQ, answer === ''])
 
   const handleAskRef = useRef(handleAsk)
   handleAskRef.current = handleAsk
@@ -329,6 +352,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
       onVolumeChange: (vol) => {
         setAudioVolume(vol)
       },
+      onError: (message) => setErrorMessage(message),
       onInterimText: (interim) => {
         setInterimSpeech(interim)
       }
@@ -338,7 +362,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
 
     if (isListening) {
       transcriber.startListening().catch((err) => {
-        console.warn('Live audio capture init warning:', err)
+        setErrorMessage(err?.message || 'Could not start audio capture')
       })
     }
 
@@ -394,7 +418,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             name: file.name,
             size: file.size,
             type: file.type || 'text/plain',
-            mode: activeMode,
+            mode: 'all',
             content: text,
             addedAt: Date.now()
           })
@@ -405,6 +429,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         setLastHotkey(`Attached ${newDocs[0].name}`)
       } catch (err) {
         console.error('Failed to parse dropped file onto HUD', err)
+        setErrorMessage((err as Error)?.message || 'Could not read that file')
       }
     },
     [activeMode, refreshDocuments]
@@ -613,7 +638,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
               <Square size={10} fill="currentColor" />
               <span>Stop</span>
             </button>
-          ) : answer ? (
+          ) : answer || thread.length > 0 ? (
             <button className="primary-action-btn clear-state" onClick={handleClear} title="Clear overlay (⌘⇧⌫)">
               <Trash2 size={10} />
               <span>Clear</span>
@@ -635,7 +660,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
 
           <div className="transcript-content-text">
             {interimSpeech ? (
-              <span className="interim-text">"{interimSpeech}..."</span>
+              <span className="interim-text">Transcribing…</span>
             ) : latestTurn ? (
               <span className={latestTurn.isQuestion ? 'question-text' : 'normal-text'}>
                 "{latestTurn.text}"
@@ -688,12 +713,20 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             </div>
           )}
 
+          {thread.map((item) => (
+            <div key={item.id} className="thread-item">
+              {item.q && <div className="thread-q">{item.q}</div>}
+              <FormattedAnswer content={item.a} isStreaming={false} />
+            </div>
+          ))}
           {answer ? (
-            <FormattedAnswer content={answer} isStreaming={status === 'streaming'} />
+            <div className="thread-item current">
+              {currentQ && <div className="thread-q">{currentQ}</div>}
+              <FormattedAnswer content={answer} isStreaming={status === 'streaming'} />
+            </div>
           ) : (
-            !errorMessage && (
-              <div className="empty-hint">{isLive ? 'Listening' : 'Paused'}</div>
-            )
+            !errorMessage &&
+            thread.length === 0 && <div className="empty-hint">{isLive ? 'Listening' : 'Paused'}</div>
           )}
         </div>
 
@@ -701,7 +734,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         {isLive && (
           <input
             className="followup-input"
-            placeholder={answer ? 'Follow-up… (Enter)' : 'Type a question… (Enter)'}
+            placeholder={answer || thread.length ? 'Follow-up… (Enter)' : 'Type a question… (Enter)'}
             onKeyDown={(e) => {
               const text = e.currentTarget.value.trim()
               if (e.key !== 'Enter' || !text) return
@@ -712,7 +745,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         )}
 
         {/* Quick Interview Format Chips */}
-        {activeMode === 'interview' && answer && status === 'idle' && (
+        {activeMode === 'interview' && (answer || thread.length > 0) && status === 'idle' && (
           <div className="interview-quick-bar">
             <button
               className="quick-chip"

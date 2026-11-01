@@ -11,7 +11,7 @@ Bring your own OpenRouter key. There is no backend: everything runs on your mach
 - **Hidden overlay**: frameless, always-on-top across all Spaces and full-screen apps, with `setContentProtection(true)` so capture APIs omit it. Menu bar tray, no Dock icon.
 - **Models from your key**: nothing is hardcoded. Saving your OpenRouter key loads the models you can use, filtered to those that accept text and screenshots and stream text back. One model serves every mode; if none is chosen, the cheapest paid model with a decent context window is picked.
 - **Modes**: Interview, Meeting, Sales, Custom, each with an editable system directive.
-- **Live transcript and auto-answer**: continuous speech-to-text with question detection. Engines: browser Web Speech API (no key), Groq Whisper, OpenAI Whisper, or a local Whisper HTTP endpoint.
+- **Live transcript and auto-answer**: continuous speech-to-text with question detection. Interviewer audio (system output) and your mic are captured separately; only the interviewer can trigger answers. Engines: an audio-capable model on your OpenRouter account (default, no extra key), Groq Whisper, OpenAI Whisper, or a local Whisper HTTP endpoint.
 - **CV / document grounding**: drop a PDF, TXT or Markdown file on the overlay. Answers are told to stay within it.
 - **Follow-ups**: type a follow-up under any answer.
 - **Stop / Pause / Clear**: `Esc` halts generation and keeps partial output; Pause silences auto-triggers.

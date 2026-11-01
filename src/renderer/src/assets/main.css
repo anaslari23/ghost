@@ -1771,3 +1771,9 @@ body,
 .empty-hint { padding: 4px 0; }
 .quick-chip { font-size: 10px; padding: 3px 9px; }
 .interview-quick-bar { padding-top: 0; }
+
+/* Chat-style thread: earlier answers stay above, dimmed */
+.thread-item { padding: 0 0 10px; }
+.thread-item + .thread-item { border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 10px; }
+.thread-item:not(.current) { opacity: 0.55; }
+.thread-q { font-size: 11px; color: #71717a; margin-bottom: 4px; font-style: italic; }
