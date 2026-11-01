@@ -14,49 +14,51 @@ export interface OpenRouterModel {
 export const DEFAULT_MODES: ModesMap = {
   interview: {
     name: 'Interview',
-    systemPrompt: `You are an elite, real-time interview co-pilot (like Parakeet AI). Your job is to listen to what the interviewer is asking, observe what is on their screen, and generate the exact, winning answer for the candidate to speak.
-
-CORE OPERATIONAL RULES:
-1. DIRECT SPOKEN ANSWER FIRST: Always start with the immediate, punchy 1-2 sentence core answer the candidate can say aloud right away without hesitation.
-2. STRICT RESUME / CV BOUNDEDNESS: When a candidate CV or document is provided, you are STRICTLY BOUNDED by the companies, technologies, projects, and metrics documented therein.
-   - Speak in the first person ("In my previous work at [Company]...").
-   - NEVER fabricate companies, degrees, titles, or experiences not in the document.
-   - If asked about an unfamiliar technology, explain the concept accurately, then honestly connect it to the closest related tool from your CV.
-3. VISUAL + CONVERSATION ALIGNMENT: Synthesize what the interviewer said with whatever is displayed on their screen (LeetCode problem, architecture diagram, slides, PR diff). Point directly to the relevant variable, function, or architectural trade-off on screen.
-4. CODING QUESTIONS: State the optimal Big-O Time & Space complexity upfront, edge cases to mention, and clean, readable code.
-5. BEHAVIORAL QUESTIONS: Deliver a compact STAR story (Situation, Task, Action, Result) using verifiable metrics from the candidate's CV.
-6. STEERING POINTS: End with 1-2 sharp follow-up talking points to guide the conversation.`,
+    systemPrompt: `You are the user's live interview coach. Write exactly what they should say next, in first person, in their voice.
+- Understand the question's intent, then build the answer from the user's background below. Never paste or list the CV: pick the 1-2 most relevant experiences, retell them naturally with their key numbers, and tie them to what is being asked (and to the target role: the one given below, otherwise the role the CV points to).
+- Open with a 1-2 sentence direct answer they can say immediately, then at most 3 short supporting bullets.
+- Behavioral question: a tight STAR story (about 120 words). Technical or system design: the approach and key trade-offs, citing real experience only where it genuinely fits. Coding: approach, complexity, clean code, edge cases.
+- If the background has nothing relevant, answer well in general terms and say so briefly. Never invent employers, titles, degrees or metrics.`,
     model: '',
     maxScreenshotEdge: 1280
   },
   meeting: {
     name: 'Meeting',
-    systemPrompt:
-      'You are an executive meeting assistant. Provide concise bullet points, action items, decisions, and clear answers.',
+    systemPrompt: `You are the user's real-time meeting assistant. Work out what is being asked of the user or what just happened, and give what they should say or know, as short bullets.
+- A question to the user: a ready-to-say reply, using the user's notes below for facts.
+- Decisions, owners, deadlines or action items you hear: list them.
+- No more than 5 bullets, no padding. Never invent facts that are not in the notes or the conversation.`,
     model: '',
     maxScreenshotEdge: 1280
   },
   sales: {
     name: 'Sales',
-    systemPrompt:
-      'You are a real-time sales battlecard advisor. Address customer objections immediately with value metrics and concise talking points.',
+    systemPrompt: `You are the user's live sales coach on a call. Identify the prospect's intent (question, objection or buying signal) and give the next thing to say.
+- Objection: acknowledge it, reframe around value, add one proof point from the product notes below, then ask a question that moves the deal forward.
+- Product or pricing questions: answer only from the notes below; if it is not there, say what to promise to follow up on.
+- At most 4 short bullets plus one suggested question. Never invent features, prices or customers.`,
     model: '',
     maxScreenshotEdge: 1280
   },
   custom: {
     name: 'Custom',
-    systemPrompt: 'You are an intelligent real-time screen assistant. Help the user answer questions concisely.',
+    systemPrompt:
+      "You are a real-time assistant. Work out what is being asked from the speech and the screen, and give a concise, directly usable answer. Use the user's documents when relevant. Never invent facts.",
     model: '',
     maxScreenshotEdge: 1280
   }
 }
+
+// Bump when DEFAULT_MODES prompts change so stale saved prompts don't override them.
+const PROMPTS_VERSION = '3'
 
 const STORAGE_KEYS = {
   API_KEY: 'cluely_openrouter_api_key',
   MODES: 'cluely_modes_config',
   ACTIVE_MODE: 'cluely_active_mode',
   CACHED_MODELS: 'cluely_cached_models',
-  MODEL: 'ghost_model'
+  MODEL: 'ghost_model',
+  PROMPTS_VERSION: 'ghost_prompts_version'
 }
 
 export function getStoredApiKey(): string {
@@ -77,6 +79,10 @@ export function setStoredApiKey(key: string): void {
 
 export function getStoredModes(): ModesMap {
   try {
+    if (localStorage.getItem(STORAGE_KEYS.PROMPTS_VERSION) !== PROMPTS_VERSION) {
+      localStorage.removeItem(STORAGE_KEYS.MODES)
+      localStorage.setItem(STORAGE_KEYS.PROMPTS_VERSION, PROMPTS_VERSION)
+    }
     const raw = localStorage.getItem(STORAGE_KEYS.MODES)
     if (raw) {
       return { ...DEFAULT_MODES, ...JSON.parse(raw) }
@@ -273,7 +279,13 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
   }
 
   const messages = [
-    { role: 'system', content: systemPrompt },
+    {
+      role: 'system',
+      // Stable prefix (instructions + condensed CV): cached by Anthropic/Gemini, ~90% cheaper on repeat requests.
+      content: /^(anthropic|google)\//.test(model)
+        ? [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }]
+        : systemPrompt
+    },
     ...history,
     { role: 'user', content: userContentParts }
   ]
@@ -289,7 +301,7 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
     body: JSON.stringify({
       model,
       stream: true,
-      max_tokens: 1500, // answers are spoken aloud; also caps reasoning-model spend
+      max_tokens: 900, // answers are spoken aloud; also caps reasoning-model spend
       reasoning: { effort: 'low' },
       provider: {
         allow_fallbacks: true
@@ -368,4 +380,31 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
       }
     }
   }
+}
+
+/** One-shot, non-streaming completion (used to condense documents). */
+export async function completeOpenRouterChat(opts: {
+  apiKey: string
+  model: string
+  systemPrompt: string
+  userPrompt: string
+  maxTokens?: number
+}): Promise<string> {
+  let out = ''
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${opts.apiKey.trim()}`, 'Content-Type': 'application/json', 'X-Title': 'ghost' },
+    body: JSON.stringify({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 900,
+      messages: [
+        { role: 'system', content: opts.systemPrompt },
+        { role: 'user', content: opts.userPrompt }
+      ]
+    })
+  })
+  if (!response.ok) throw new Error(`OpenRouter error (${response.status})`)
+  const data = await response.json()
+  out = data.choices?.[0]?.message?.content || ''
+  return out.trim()
 }

@@ -322,7 +322,7 @@ export class LiveAudioTranscriber {
     if (speaker !== 'Interviewer' || !config.autoAnswerOnQuestion) return
 
     // Speech engines split one question into several finals; wait for a pause and answer the whole thing once.
-    if (isQuestion || cleanText.split(/\s+/).length >= 8) {
+    if (isQuestion || /\b(let'?s|i'?d like you|i want you|next up|moving on)\b/i.test(cleanText)) {
       this.pendingQuestion.push(cleanText)
       if (this.questionTimer) clearTimeout(this.questionTimer)
       this.questionTimer = setTimeout(() => {
