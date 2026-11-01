@@ -35,7 +35,7 @@ Grab the installer for your OS from [Releases](https://github.com/anaslari23/gho
 | --- | --- | --- |
 | macOS | `Ghost-<version>-mac-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel) | Right-click the app, choose Open. Allow Screen Recording and Microphone. |
 | Windows | `Ghost-<version>-win-setup-x64.exe` (installer) or `Ghost-<version>-win-x64.exe` (portable) | SmartScreen: More info, then Run anyway. |
-| Linux | `Ghost-<version>-linux-x64.AppImage` or `.deb` | `chmod +x` the AppImage and run it. |
+| Linux | `Ghost-<version>-linux-x86_64.AppImage` or `Ghost-<version>-linux-amd64.deb` | `chmod +x` the AppImage and run it. |
 
 Platform notes: macOS is the primary target. On Windows the overlay is hidden from capture and system audio is captured. On Linux, hiding the overlay from screen capture and capturing system audio are not supported, so use the mic or a Groq/OpenAI engine and treat it as best effort.
 
