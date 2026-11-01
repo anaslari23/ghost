@@ -1,7 +1,8 @@
 {
   "name": "ghost",
-  "version": "1.0.0",
-  "description": "Ghost Overlay - Discreet Screen Co-Pilot",
+  "version": "1.0.1",
+  "description": "A discreet screen co-pilot for interviews, meetings and sales calls: a hidden overlay that listens, reads your screen and your CV, and streams tailored answers from OpenRouter models.",
+  "license": "MIT",
   "main": "./out/main/index.js",
   "author": "anaslari23 <anaslari610@gmail.com>",
   "homepage": "https://github.com/anaslari23/ghost",
