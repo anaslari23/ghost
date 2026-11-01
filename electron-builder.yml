@@ -14,8 +14,10 @@ asarUnpack:
   - resources/**
 mac:
   target:
-    - dir
-    - dmg
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
   category: public.app-category.utilities
   identity: null
   notarize: false
@@ -25,5 +27,28 @@ mac:
     NSMicrophoneUsageDescription: Ghost uses microphone access to transcribe interview audio context.
     NSScreenCaptureUsageDescription: Ghost uses screen recording access to analyze code and questions on your display.
 dmg:
-  artifactName: ${productName}-${version}.${ext}
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-win-setup-${arch}.${ext}
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  icon: build/icon.png
+  category: Utility
+  maintainer: anaslari23 <anaslari610@gmail.com>
+  synopsis: Discreet screen co-pilot overlay
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
 npmRebuild: false

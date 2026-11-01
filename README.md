@@ -27,6 +27,22 @@ Bring your own OpenRouter key. There is no backend: everything runs on your mach
 | `Esc` | Stop generation |
 | `⌘` + arrow keys | Move the overlay |
 
+## Download
+
+Grab the installer for your OS from [Releases](https://github.com/anaslari23/ghost/releases). Builds are **unsigned**:
+
+| OS | File | First launch |
+| --- | --- | --- |
+| macOS | `Ghost-<version>-mac-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel) | Right-click the app, choose Open. Allow Screen Recording and Microphone. |
+| Windows | `Ghost-<version>-win-setup-x64.exe` (installer) or `Ghost-<version>-win-x64.exe` (portable) | SmartScreen: More info, then Run anyway. |
+| Linux | `Ghost-<version>-linux-x64.AppImage` or `.deb` | `chmod +x` the AppImage and run it. |
+
+Platform notes: macOS is the primary target. On Windows the overlay is hidden from capture and system audio is captured. On Linux, hiding the overlay from screen capture and capturing system audio are not supported, so use the mic or a Groq/OpenAI engine and treat it as best effort.
+
+### Releasing
+
+Pushing a tag like `v1.0.1` runs `.github/workflows/release.yml`, which builds all three platforms and publishes a GitHub release. `ci.yml` typechecks, tests and builds on every push and pull request.
+
 ## Getting started
 
 Requires macOS (Apple Silicon or Intel), Node 20+.
