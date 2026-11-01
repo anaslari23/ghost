@@ -57,10 +57,6 @@ env -u ELECTRON_RUN_AS_NODE npm run dev
 
 Push a `v*` tag to build and publish all three platforms via GitHub Actions.
 
-## Use responsibly
-
-Using an assistant like this in interviews or exams may break employer, school or platform rules. Your call.
-
 ## License
 
 [MIT](LICENSE)
