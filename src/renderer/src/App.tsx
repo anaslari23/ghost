@@ -11,9 +11,6 @@ import {
   Minimize2,
   Shield,
   Trash2,
-  Zap,
-  Mic,
-  MicOff,
   ChevronDown,
   ChevronUp
 } from 'lucide-react'
@@ -81,6 +78,8 @@ export const App: React.FC = () => {
   const abortControllerRef = useRef<AbortController | null>(null)
   const answerBoxRef = useRef<HTMLDivElement>(null)
   const transcriberRef = useRef<LiveAudioTranscriber | null>(null)
+  // Rolling memory: the last few Q/A pairs, replayed as chat turns so follow-ups make sense.
+  const historyRef = useRef<{ q: string; a: string }[]>([])
   const recentTurnsRef = useRef<TranscriptTurn[]>([])
   recentTurnsRef.current = recentTurns
   const lastAutoAnswerTimeRef = useRef<number>(0)
@@ -198,7 +197,7 @@ export const App: React.FC = () => {
       setStatus('thinking')
       setDetectedQuestion(null)
       setErrorMessage(null)
-      setAnswer('')
+      if (!turnsOverride) setAnswer('') // auto-answers keep the old answer on screen until a real one starts
       setLastHotkey('Generating')
 
       try {
@@ -218,7 +217,11 @@ export const App: React.FC = () => {
         const docContext = formatDocumentsPromptContext(activeModeDocs)
         const combinedSystemPrompt = `${activeConfig.systemPrompt}
 ${docContext}
-Answer in the first person, concise enough to speak aloud. Ground any claim about the user's background strictly in the documents above; never invent employers, degrees or metrics.`
+Answer in the first person, concise enough to speak aloud. Ground any claim about the user's background strictly in the documents above; never invent employers, degrees or metrics.${
+          turnsOverride
+            ? '\nYou are listening live. If the latest speech does not need an answer (small talk, filler, the user talking, a statement with no question or request), reply with exactly NO_ANSWER and nothing else.'
+            : ''
+        }`
 
         // 3. Prepare user prompt: only fresh speech, only the question being answered
         const now = Date.now()
@@ -243,6 +246,14 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
           userPrompt += `\nSPECIAL FORMATTING INSTRUCTION: ${customPromptExtension}`
         }
 
+        const gated = !!turnsOverride
+        let full = ''
+        let released = !gated
+        let silent = false
+        const remember = (q: string, a: string): void => {
+          historyRef.current = [...historyRef.current, { q, a: a.slice(0, 700) }].slice(-4)
+        }
+
         // 4. Stream answer directly from OpenRouter in frontend
         await streamOpenRouterChat({
           apiKey,
@@ -250,14 +261,31 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
           systemPrompt: combinedSystemPrompt,
           userPrompt,
           screenshotBase64,
+          history: historyRef.current.flatMap((h) => [
+            { role: 'user' as const, content: h.q },
+            { role: 'assistant' as const, content: h.a }
+          ]),
           onDelta: (token: string) => {
-            setAnswer((prev) => prev + token)
+            full += token
+            if (gated && !released) {
+              const t = full.trim()
+              if (t.length < 9 && 'NO_ANSWER'.startsWith(t)) return // might still turn into NO_ANSWER
+              if (t.startsWith('NO_ANSWER')) {
+                silent = true
+                return
+              }
+              released = true
+            }
+            if (silent) return
+            setAnswer(full)
             if (answerBoxRef.current) {
               answerBoxRef.current.scrollTop = answerBoxRef.current.scrollHeight
             }
           },
           signal: abortController.signal
         })
+
+        if (!silent && full.trim()) remember(targetQuestion || customPromptExtension || 'Answer from the screen', full)
 
         setStatus('idle')
       } catch (e: any) {
@@ -293,7 +321,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
         setDetectedQuestion(question)
         if (autoAnswerRef.current && !isPausedRef.current && statusRef.current === 'idle') {
           const now = Date.now()
-          if (now - lastAutoAnswerTimeRef.current > 5000) {
+          if (now - lastAutoAnswerTimeRef.current > 8000) {
             lastAutoAnswerTimeRef.current = now
             handleAskRef.current(undefined, question, turns)
           }
@@ -321,31 +349,21 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
     }
   }, [isListening])
 
-  const toggleListening = useCallback(() => {
-    setIsListening((prev) => {
-      const next = !prev
-      if (transcriberRef.current) {
-        if (next) {
-          transcriberRef.current.startListening().catch(console.warn)
-        } else {
-          transcriberRef.current.stopListening()
-        }
-      }
-      return next
-    })
-  }, [])
-
-  const toggleAutoAnswer = useCallback(() => {
-    setAutoAnswerEnabled((prev) => {
-      const next = !prev
-      const cfg = getStoredSTTConfig()
-      cfg.autoAnswerOnQuestion = next
-      saveStoredSTTConfig(cfg)
-      return next
-    })
-  }, [])
+  // One switch: Start = listen + auto-answer on; Pause = mic off, nothing fires.
+  const isLive = isListening && autoAnswerEnabled && !isPaused
+  const toggleLive = useCallback(() => {
+    const next = !(isListening && autoAnswerRef.current && !isPausedRef.current)
+    setIsPaused(!next)
+    setIsListening(next)
+    setAutoAnswerEnabled(next)
+    const cfg = getStoredSTTConfig()
+    cfg.autoAnswerOnQuestion = next
+    saveStoredSTTConfig(cfg)
+    if (!next) handleStop()
+  }, [isListening, handleStop])
 
   const handleSelectMode = useCallback((mode: AppMode) => {
+    historyRef.current = []
     setActiveMode(mode)
     setStoredActiveMode(mode)
   }, [])
@@ -485,44 +503,10 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             <Shield size={10} className="shield-icon" />
           </div>
 
-          <button
-            className={`pause-pill ${isPaused ? 'paused' : 'active'}`}
-            onClick={() => setIsPaused(!isPaused)}
-            title={isPaused ? 'AI is Paused (Click to Activate)' : 'AI is Active (Click to Pause)'}
-          >
-            {isPaused ? <Pause size={10} /> : <Play size={10} />}
-            <span>{isPaused ? 'Paused' : 'Active'}</span>
-          </button>
         </div>
 
         {/* Header Right Action Group */}
         <div className="header-right">
-          {/* Auto-Answer Toggle Button */}
-          <button
-            className={`tool-pill ${autoAnswerEnabled ? 'auto-active' : ''}`}
-            onClick={toggleAutoAnswer}
-            title={
-              autoAnswerEnabled
-                ? 'Auto-Answer is ON: Automatically generates answers when questions are detected.'
-                : 'Auto-Answer is OFF: Press ⌘↵ to generate.'
-            }
-          >
-            <Zap size={11} />
-            <span>Auto</span>
-          </button>
-
-          {/* Audio Input Toggle & Volume Indicator */}
-          <button
-            className={`tool-pill ${isListening ? 'mic-active' : ''}`}
-            onClick={toggleListening}
-            title={isListening ? 'Microphone listening (Click to mute)' : 'Microphone muted (Click to listen)'}
-          >
-            {isListening ? <Mic size={11} /> : <MicOff size={11} />}
-            {isListening && audioVolume > 5 && (
-              <span className="volume-indicator-bar" style={{ width: `${Math.min(16, audioVolume / 4)}px` }} />
-            )}
-                      </button>
-
           {/* Document Grounding Pill */}
           <button
             className={`tool-pill ${activeModeDocs.length > 0 ? 'highlight-doc' : ''}`}
@@ -577,6 +561,17 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
           ))}
         </div>
 
+          <button
+            className={`live-btn ${isLive ? 'live' : ''}`}
+            onClick={toggleLive}
+            title={isLive ? 'Listening and answering questions. Click to pause.' : 'Start listening and auto-answering'}
+          >
+            {isLive ? <Pause size={11} /> : <Play size={11} />}
+            <span>{isLive ? 'Pause' : 'Start'}</span>
+            {isLive && audioVolume > 5 && (
+              <span className="volume-indicator-bar" style={{ width: `${Math.min(14, audioVolume / 4)}px` }} />
+            )}
+          </button>
 
           {/* Primary Action Button (Stop or Clear or Ask) */}
           {status === 'thinking' || status === 'streaming' ? (
@@ -591,7 +586,7 @@ Answer in the first person, concise enough to speak aloud. Ground any claim abou
             </button>
           ) : (
             <button className="primary-action-btn ask-state" onClick={() => handleAsk()} title="Capture Screen & Spoken Context (⌘↵)">
-              <span>Ask ⌘↵</span>
+              <span>Ask now</span>
             </button>
           )}
       </div>

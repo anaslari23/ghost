@@ -1689,3 +1689,37 @@ body,
   color: #09090b;
 }
 .primary-action-btn.ask-state:hover { background: #fff; color: #09090b; }
+
+/* Start / Pause: the one switch that matters */
+.live-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 74px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #052e1a;
+  background: #4ade80;
+  border: 1px solid #4ade80;
+  transition: all 0.15s ease;
+}
+.live-btn:hover { background: #86efac; }
+.live-btn.live {
+  color: #e4e4e7;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.live-btn.live:hover { background: rgba(255, 255, 255, 0.14); }
+.live-btn .volume-indicator-bar { position: absolute; bottom: 3px; left: 12px; height: 2px; }
+.primary-action-btn.ask-state {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e4e4e7;
+}
+.primary-action-btn.ask-state:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
