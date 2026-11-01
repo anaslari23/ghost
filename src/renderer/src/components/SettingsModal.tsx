@@ -25,7 +25,19 @@ interface SettingsModalProps {
 }
 
 type SettingsTab = 'models' | 'audio'
-type ModelCategory = 'all' | 'free'
+type ModelCategory = string // 'all' or a provider prefix such as 'anthropic'
+
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Claude',
+  openai: 'OpenAI',
+  google: 'Google',
+  'meta-llama': 'Llama',
+  mistralai: 'Mistral',
+  'x-ai': 'xAI',
+  deepseek: 'DeepSeek',
+  qwen: 'Qwen'
+}
+const providerOf = (id: string): string => id.split('/')[0]
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
@@ -117,11 +129,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     onClose()
   }
 
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>()
+    models.forEach((m) => counts.set(providerOf(m.id), (counts.get(providerOf(m.id)) || 0) + 1))
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+  }, [models])
+
   const filteredModels = useMemo(() => {
     const q = searchQuery.toLowerCase().trim()
     return models.filter(
       (m) =>
-        (category !== 'free' || m.isFree) &&
+        (category === 'all' || providerOf(m.id) === category) &&
         (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
     )
   }, [models, category, searchQuery])
@@ -214,14 +232,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className={`cat-pill ${category === 'all' ? 'active' : ''}`}
                       onClick={() => setCategory('all')}
                     >
-                      All
+                      All ({models.length})
                     </button>
-                    <button
-                      className={`cat-pill ${category === 'free' ? 'active' : ''}`}
-                      onClick={() => setCategory('free')}
-                    >
-                      Free
-                    </button>
+                    {categories.map(([provider, count]) => (
+                      <button
+                        key={provider}
+                        className={`cat-pill ${category === provider ? 'active' : ''}`}
+                        onClick={() => setCategory(provider)}
+                      >
+                        {PROVIDER_LABELS[provider] || provider} ({count})
+                      </button>
+                    ))}
                   </div>
 
                   <div className="search-bar-row">

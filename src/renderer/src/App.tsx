@@ -5,6 +5,7 @@ import {
   Pause,
   Settings,
   FileText,
+  Target,
   Copy,
   Check,
   Maximize2, MousePointer2,
@@ -29,6 +30,7 @@ import {
   getStoredDocuments,
   saveStoredDocuments,
   parseFileToText,
+  summarizeDocument,
   formatDocumentsPromptContext
 } from './services/documents'
 import {
@@ -40,6 +42,8 @@ import {
 import { FormattedAnswer } from './components/FormattedAnswer'
 import { SettingsModal } from './components/SettingsModal'
 import { DocumentsModal } from './components/DocumentsModal'
+import { BriefModal } from './components/BriefModal'
+import { Brief, getStoredBrief, formatBriefPromptContext, hasBrief } from './services/brief'
 
 const SCREEN_RE = /\b(screen|this|here|code|problem|diagram|slide|see|shown|following|below|above|function|error|bug|chart|table)\b/i
 
@@ -50,10 +54,18 @@ export const App: React.FC = () => {
   const [modes, setModes] = useState<ModesMap>(getStoredModes)
   const [activeMode, setActiveMode] = useState<AppMode>(getStoredActiveMode)
   const [status, setStatus] = useState<AppStatus>('idle')
-  const [answer, setAnswer] = useState<string>('')
+  // The conversation survives pausing, mode switches and restarts; only Clear wipes it.
+  const saved = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('ghost_conversation') || '{}')
+    } catch {
+      return {}
+    }
+  }, [])
+  const [answer, setAnswer] = useState<string>(saved.answer || '')
   // Earlier answers stay above the newest one, chat-style.
-  const [thread, setThread] = useState<{ id: number; q: string; a: string }[]>([])
-  const [currentQ, setCurrentQ] = useState<string>('')
+  const [thread, setThread] = useState<{ id: number; q: string; a: string }[]>(saved.thread || [])
+  const [currentQ, setCurrentQ] = useState<string>(saved.currentQ || '')
   const answerRef = useRef('')
   answerRef.current = answer
   const currentQRef = useRef('')
@@ -75,6 +87,8 @@ export const App: React.FC = () => {
   // Modals
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isDocsOpen, setIsDocsOpen] = useState<boolean>(false)
+  const [isBriefOpen, setIsBriefOpen] = useState<boolean>(false)
+  const [brief, setBrief] = useState<Brief>(getStoredBrief)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Documents
@@ -85,7 +99,9 @@ export const App: React.FC = () => {
   const answerBoxRef = useRef<HTMLDivElement>(null)
   const transcriberRef = useRef<LiveAudioTranscriber | null>(null)
   // Rolling memory: the last few Q/A pairs, replayed as chat turns so follow-ups make sense.
-  const historyRef = useRef<{ q: string; a: string }[]>([])
+  const historyRef = useRef<{ q: string; a: string }[]>(
+    (saved.thread || []).filter((t: any) => t.q).slice(-3).map((t: any) => ({ q: t.q, a: t.a.slice(0, 400) }))
+  )
   const recentTurnsRef = useRef<TranscriptTurn[]>([])
   recentTurnsRef.current = recentTurns
   const lastAutoAnswerTimeRef = useRef<number>(0)
@@ -106,12 +122,30 @@ export const App: React.FC = () => {
     if (!isSettingsOpen) setModel(getStoredModel())
   }, [isSettingsOpen])
   useEffect(() => {
-    if (getStoredApiKey()) fetchOpenRouterModels().then(() => setModel(getStoredModel())).catch(() => {})
+    if (!getStoredApiKey()) return
+    fetchOpenRouterModels()
+      .then(async () => {
+        setModel(getStoredModel())
+        // Condense any document that was added before a key/model existed.
+        const docs = getStoredDocuments()
+        let changed = false
+        for (const d of docs) {
+          if (!d.summary && d.active !== false && d.content.length > 400) {
+            d.summary = await summarizeDocument(d.content)
+            changed = changed || !!d.summary
+          }
+        }
+        if (changed) {
+          saveStoredDocuments(docs)
+          setDocuments(docs)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   // Filter docs for current mode
   const activeModeDocs = useMemo(() => {
-    return documents // a CV applies to every mode
+    return documents.filter((d) => d.active !== false) // a CV applies to every mode; several can be stored
   }, [documents])
 
 
@@ -192,10 +226,6 @@ export const App: React.FC = () => {
       questionOverride?: string,
       turnsOverride?: TranscriptTurn[]
     ) => {
-      if (isPausedRef.current && !customPromptExtension && !questionOverride) {
-        setErrorMessage('AI is paused. Click Active to resume.')
-        return
-      }
 
       const apiKey = getStoredApiKey()
       if (!apiKey) {
@@ -232,13 +262,9 @@ export const App: React.FC = () => {
 
         // 2. Prepare system prompt enhanced with candidate's uploaded CV / docs
         const docContext = formatDocumentsPromptContext(activeModeDocs)
-        const combinedSystemPrompt = `${activeConfig.systemPrompt}
-${docContext}
-Answer in the first person, concise enough to speak aloud. When the question is about the user's experience, projects, skills or background, answer from the documents above, as the user, with specifics (names, numbers). Never invent employers, degrees or metrics that are not in them.${
-          turnsOverride
-            ? '\nYou are listening live. If the latest speech does not need an answer (small talk, filler, the user talking, a statement with no question or request), reply with exactly NO_ANSWER and nothing else.'
-            : ''
-        }`
+        const gated = !!turnsOverride
+        // Kept identical between requests (and free of per-request text) so provider prompt caching applies.
+        const combinedSystemPrompt = `${activeConfig.systemPrompt}${formatBriefPromptContext(getStoredBrief(), activeMode)}${docContext}`
 
         // 3. Prepare user prompt: only fresh speech, only the question being answered
         const now = Date.now()
@@ -257,19 +283,21 @@ Answer in the first person, concise enough to speak aloud. When the question is 
         if (screenshotBase64) {
           userPrompt += `A screenshot of the screen is attached. Use it only if the question refers to it.\n\n`
         }
-        userPrompt += `Answer only the question above. Use the documents only for facts about the user's own background, and only when relevant; with no documents, never invent personal experience, answer in general terms. If the question is missing or unclear, say so in one line and ask what to answer instead of guessing.`
+        userPrompt += `Answer only the question above, concise enough to say aloud. Use the documents only where they genuinely fit. If the question is missing or unclear, say so in one line instead of guessing.`
+        if (gated) {
+          userPrompt += `\nYou are listening live: if the latest speech needs no answer (small talk, filler, the user talking, a statement with no question or request), reply with exactly NO_ANSWER.`
+        }
 
         if (customPromptExtension) {
           userPrompt += `\nSPECIAL FORMATTING INSTRUCTION: ${customPromptExtension}`
         }
 
-        const gated = !!turnsOverride
         if (!gated) setCurrentQ(targetQuestion)
         let full = ''
         let released = !gated
         let silent = false
         const remember = (q: string, a: string): void => {
-          historyRef.current = [...historyRef.current, { q, a: a.slice(0, 700) }].slice(-4)
+          historyRef.current = [...historyRef.current, { q, a: a.slice(0, 400) }].slice(-3)
         }
 
         // 4. Stream answer directly from OpenRouter in frontend
@@ -319,13 +347,18 @@ Answer in the first person, concise enough to speak aloud. When the question is 
         }
       }
     },
-    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs, archiveAnswer]
+    [activeConfig.model, activeConfig.systemPrompt, activeConfig.maxScreenshotEdge, activeModeDocs, archiveAnswer, activeMode]
   )
 
   // A new answer starts at the top of the view, so the first words are readable while it streams.
   useEffect(() => {
     answerBoxRef.current?.querySelector('.thread-item.current')?.scrollIntoView({ block: 'start' })
   }, [thread.length, currentQ, answer === ''])
+
+  useEffect(() => {
+    if (status === 'streaming' || status === 'thinking') return
+    localStorage.setItem('ghost_conversation', JSON.stringify({ thread, answer, currentQ }))
+  }, [thread, answer, currentQ, status])
 
   const handleAskRef = useRef(handleAsk)
   handleAskRef.current = handleAsk
@@ -420,6 +453,7 @@ Answer in the first person, concise enough to speak aloud. When the question is 
             type: file.type || 'text/plain',
             mode: 'all',
             content: text,
+            summary: await summarizeDocument(text),
             addedAt: Date.now()
           })
         }
@@ -576,6 +610,15 @@ Answer in the first person, concise enough to speak aloud. When the question is 
             <span>{activeModeDocs.length > 0 ? `${activeModeDocs.length} CV` : '+ CV'}</span>
           </button>
 
+          <button
+            className={`tool-pill ${hasBrief(brief) ? 'highlight-doc' : ''}`}
+            onClick={() => setIsBriefOpen(true)}
+            title={hasBrief(brief) ? `Target: ${[brief.role, brief.company].filter(Boolean).join(' at ') || 'notes set'}` : 'Set target role and company (optional)'}
+          >
+            <Target size={12} />
+            {hasBrief(brief) && <span>{brief.role || brief.company || 'Target'}</span>}
+          </button>
+
           {/* Click Through Toggle */}
           <button
             className={`tool-pill ${clickThrough ? 'active-tool' : ''}`}
@@ -730,8 +773,8 @@ Answer in the first person, concise enough to speak aloud. When the question is 
           )}
         </div>
 
-        {/* Typed question / follow-up: available whenever Ghost is running */}
-        {isLive && (
+        {/* Typed question / follow-up: always available, even while paused */}
+        {(
           <input
             className="followup-input"
             placeholder={answer || thread.length ? 'Follow-up… (Enter)' : 'Type a question… (Enter)'}
@@ -790,11 +833,12 @@ Answer in the first person, concise enough to speak aloud. When the question is 
         activeMode={activeMode}
       />
 
+      <BriefModal isOpen={isBriefOpen} onClose={() => setIsBriefOpen(false)} onSaved={setBrief} />
+
       {/* CV & Documents Modal */}
       <DocumentsModal
         isOpen={isDocsOpen}
         onClose={() => setIsDocsOpen(false)}
-        activeMode={activeMode}
         onDocumentsUpdated={refreshDocuments}
       />
     </div>
