@@ -1,8 +1,9 @@
 import * as pdfjs from 'pdfjs-dist'
+import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { AppMode } from '../../../shared/types'
 
-// Configure pdfjs worker using cdn or inline blob to avoid bundler resolution issues
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.mjs`
+// Bundled locally: the CSP (script-src 'self') blocks a CDN worker, which silently broke every PDF.
+pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
 
 export interface AttachedDocument {
   id: string
@@ -85,15 +86,7 @@ export async function parseFileToText(file: File): Promise<string> {
       console.warn('PDF.js parse warning, attempting fallback text extraction', pdfErr)
     }
 
-    // Fallback: read raw text if pdf reader fails
-    try {
-      const rawText = await file.text()
-      // Extract visible ASCII/printable characters from PDF stream
-      const printable = rawText.replace(/[^\x20-\x7E\n\t]/g, ' ')
-      return printable.slice(0, 8000)
-    } catch {
-      return `[PDF File: ${file.name} attached, size ${file.size} bytes]`
-    }
+    throw new Error(`Could not read text from ${file.name}. Export it as a text-based PDF or TXT.`)
   }
 
   // 3. Fallback for other document types
@@ -103,7 +96,7 @@ export async function parseFileToText(file: File): Promise<string> {
 export function formatDocumentsPromptContext(docs: AttachedDocument[]): string {
   if (!docs || docs.length === 0) return ''
 
-  let context = '\n\n=== USER DOCUMENTS ===\n'
+  let context = '\n\n=== USER DOCUMENTS (the user\'s CV / notes: treat as the user\'s own background) ===\n'
   for (const doc of docs) {
     context += `--- ${doc.name} ---\n${doc.content.replace(/\s+/g, ' ').slice(0, 12000)}\n`
   }
