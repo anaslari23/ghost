@@ -11,6 +11,8 @@ Invisible to screen share. Pay only for the tokens you use.
 
 </div>
 
+<p align="center"><img src="docs/demo.gif" alt="Ghost demo: press Start, the interviewer asks a question, the answer streams in" width="560"></p>
+
 ---
 
 Cluely and its alternatives charge a monthly subscription for what is, underneath, an LLM call. Ghost is the same idea without the middleman: drop in your [OpenRouter](https://openrouter.ai) key, pick any model, and it works. No account, no backend, nothing leaves your machine except the requests you choose to send.
