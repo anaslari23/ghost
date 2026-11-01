@@ -52,7 +52,8 @@ export function isLikelyQuestion(text: string): boolean {
 
   if (trimmed.endsWith('?')) return true
 
-  const lower = trimmed.toLowerCase()
+  // Only a question if it *starts* like one; substring matches fired on any statement containing "what ", "time complexity", etc.
+  const lower = trimmed.toLowerCase().replace(/^((so|okay|ok|alright|right|and|now|well|um|uh|yeah)[, ]+)+/, '')
   const questionStarters = [
     'how ',
     'how would',
@@ -96,7 +97,7 @@ export function isLikelyQuestion(text: string): boolean {
     'space complexity'
   ]
 
-  return questionStarters.some((prefix) => lower.includes(prefix))
+  return questionStarters.some((prefix) => lower.startsWith(prefix))
 }
 
 export class LiveAudioTranscriber {
@@ -118,6 +119,8 @@ export class LiveAudioTranscriber {
   private onInterimText?: (interim: string) => void
 
   private rollingTurns: TranscriptTurn[] = []
+  private pendingQuestion: string[] = []
+  private questionTimer: any = null
 
   constructor(callbacks: {
     onTurnTranscribed: (turn: TranscriptTurn) => void
@@ -183,6 +186,9 @@ export class LiveAudioTranscriber {
 
   public stopListening(): void {
     this.isListening = false
+    if (this.questionTimer) clearTimeout(this.questionTimer)
+    this.questionTimer = null
+    this.pendingQuestion = []
 
     if (this.speechRecognition) {
       try {
@@ -382,8 +388,19 @@ export class LiveAudioTranscriber {
     }
 
     // AUTO-ANSWER TRIGGER: If interviewer asked a question and autoAnswer is ON
+    // Speech engines split one question into several finals; wait for a pause and answer the whole thing once.
     if (config.autoAnswerOnQuestion && isQuestion) {
-      this.onQuestionDetected(cleanText, [...this.rollingTurns])
+      this.pendingQuestion.push(cleanText)
+      if (this.questionTimer) clearTimeout(this.questionTimer)
+      this.questionTimer = setTimeout(() => {
+        const question = this.pendingQuestion.join(' ')
+        this.pendingQuestion = []
+        this.questionTimer = null
+        this.onQuestionDetected(question, [...this.rollingTurns])
+      }, 1500)
+    } else if (this.questionTimer) {
+      // Interviewer kept talking after the question (follow-on detail): fold it in.
+      this.pendingQuestion.push(cleanText)
     }
   }
 
