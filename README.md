@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/demo.gif" alt="Ghost demo: press Start, the interviewer asks a question, the answer streams in" width="560"></p>
+
 <div align="center">
 
 # Ghost
@@ -10,8 +12,6 @@ Invisible to screen share. Pay only for the tokens you use.
 [Download](https://github.com/anaslari23/ghost/releases/latest) · [MIT License](LICENSE)
 
 </div>
-
-<p align="center"><img src="docs/demo.gif" alt="Ghost demo: press Start, the interviewer asks a question, the answer streams in" width="560"></p>
 
 ---
 
