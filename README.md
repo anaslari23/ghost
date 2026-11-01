@@ -2,7 +2,7 @@
 
 # Ghost
 
-**Skip the subscription. Add your API key and go.**
+**F*ck Cluely and its subscription. Add your API key and go.**
 
 A free, open-source AI copilot for interviews, meetings and sales calls.
 Invisible to screen share. Pay only for the tokens you use.
@@ -13,7 +13,7 @@ Invisible to screen share. Pay only for the tokens you use.
 
 ---
 
-Paid copilots like Cluely charge a monthly fee for what is, underneath, an LLM call. Ghost is the same idea without the middleman: drop in your [OpenRouter](https://openrouter.ai) key, pick any model, and it works. No account, no backend, nothing leaves your machine except the requests you choose to send.
+Cluely and its alternatives charge a monthly subscription for what is, underneath, an LLM call. Ghost is the same idea without the middleman: drop in your [OpenRouter](https://openrouter.ai) key, pick any model, and it works. No account, no backend, nothing leaves your machine except the requests you choose to send.
 
 ## Get started
 
