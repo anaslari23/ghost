@@ -694,7 +694,7 @@ export const App: React.FC = () => {
       </div>
 
       {/* Live Conversation Transcript Feed */}
-      {(latestTurn || interimSpeech) && (
+      {(interimSpeech || (latestTurn && !(answer && latestTurn.text === currentQ))) && (
       <div className="live-transcript-feed">
         <div className="transcript-meta-lane">
           <div className="transcript-live-tag">

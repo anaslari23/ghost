@@ -1794,3 +1794,6 @@ body,
 .top-tab-btn.active { background: rgba(255, 255, 255, 0.1); color: #fff; }
 .category-pills-row { scrollbar-width: none; }
 .category-pills-row::-webkit-scrollbar { display: none; }
+
+.tool-pill, .tool-pill span { white-space: nowrap; }
+.model-tag-pill { max-width: 120px; }
