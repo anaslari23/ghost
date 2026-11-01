@@ -1,0 +1,29 @@
+appId: com.ghost.overlay
+productName: Ghost
+directories:
+  buildResources: build
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+asarUnpack:
+  - resources/**
+mac:
+  target:
+    - dir
+    - dmg
+  category: public.app-category.utilities
+  identity: null
+  notarize: false
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    LSUIElement: true
+    NSMicrophoneUsageDescription: Ghost uses microphone access to transcribe interview audio context.
+    NSScreenCaptureUsageDescription: Ghost uses screen recording access to analyze code and questions on your display.
+dmg:
+  artifactName: ${productName}-${version}.${ext}
+npmRebuild: false
