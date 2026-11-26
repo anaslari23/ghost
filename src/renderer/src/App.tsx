@@ -105,6 +105,7 @@ export const App: React.FC = () => {
   const recentTurnsRef = useRef<TranscriptTurn[]>([])
   recentTurnsRef.current = recentTurns
   const lastAutoAnswerTimeRef = useRef<number>(0)
+  const gatedPendingRef = useRef(false) // an auto request is still deciding whether to answer
 
   // Keep refs in sync for callback closures
   const isPausedRef = useRef(isPaused)
@@ -263,8 +264,9 @@ export const App: React.FC = () => {
         // 2. Prepare system prompt enhanced with candidate's uploaded CV / docs
         const docContext = formatDocumentsPromptContext(activeModeDocs)
         const gated = !!turnsOverride
+        gatedPendingRef.current = gated
         // Kept identical between requests (and free of per-request text) so provider prompt caching applies.
-        const combinedSystemPrompt = `${activeConfig.systemPrompt}${formatBriefPromptContext(getStoredBrief(), activeMode)}${docContext}`
+        const combinedSystemPrompt = `${activeConfig.systemPrompt}${formatBriefPromptContext(getStoredBrief(), activeMode)}${docContext}\nReply in the language and script the speaker used: English, Hindi (Devanagari) or Hinglish (Roman letters). Keep technical terms in English.`
 
         // 3. Prepare user prompt: only fresh speech, only the question being answered
         const now = Date.now()
@@ -321,6 +323,8 @@ export const App: React.FC = () => {
                 return
               }
               released = true
+              gatedPendingRef.current = false
+              lastAutoAnswerTimeRef.current = Date.now()
               archiveAnswer()
               setCurrentQ(targetQuestion)
             }
@@ -343,6 +347,7 @@ export const App: React.FC = () => {
         setErrorMessage(e?.message || 'Failed to complete request via OpenRouter')
       } finally {
         if (abortControllerRef.current === abortController) {
+          gatedPendingRef.current = false
           abortControllerRef.current = null
         }
       }
@@ -374,10 +379,9 @@ export const App: React.FC = () => {
       },
       onQuestionDetected: (question, turns) => {
         setDetectedQuestion(question)
-        if (autoAnswerRef.current && !isPausedRef.current && statusRef.current === 'idle') {
+        if (autoAnswerRef.current && !isPausedRef.current && (statusRef.current === 'idle' || gatedPendingRef.current)) {
           const now = Date.now()
           if (now - lastAutoAnswerTimeRef.current > 8000) {
-            lastAutoAnswerTimeRef.current = now
             handleAskRef.current(undefined, question, turns)
           }
         }

@@ -8,11 +8,14 @@ export interface TranscriptTurn {
   isQuestion?: boolean
 }
 
-export type STTProvider = 'openrouter' | 'groq' | 'openai' | 'local'
+export type STTProvider = 'openrouter' | 'groq' | 'sarvam' | 'openai' | 'local'
 
 export interface STTConfig {
   provider: STTProvider
   groqApiKey?: string
+  sarvamApiKey?: string
+  /** BCP-47 code such as en-IN, or 'unknown' to auto-detect. */
+  sarvamLanguage?: string
   openaiApiKey?: string
   localEndpoint?: string
   autoAnswerOnQuestion: boolean
@@ -25,6 +28,8 @@ const STORAGE_KEY_STT = 'ghost_stt_config'
 export const DEFAULT_STT_CONFIG: STTConfig = {
   provider: 'openrouter',
   groqApiKey: '',
+  sarvamApiKey: '',
+  sarvamLanguage: 'en-IN',
   openaiApiKey: '',
   localEndpoint: 'http://127.0.0.1:8178/inference',
   autoAnswerOnQuestion: true,
@@ -322,7 +327,9 @@ export class LiveAudioTranscriber {
     if (speaker !== 'Interviewer' || !config.autoAnswerOnQuestion) return
 
     // Speech engines split one question into several finals; wait for a pause and answer the whole thing once.
-    if (isQuestion || /\b(let'?s|i'?d like you|i want you|next up|moving on)\b/i.test(cleanText)) {
+    // Language-agnostic: any real utterance (4+ words) goes to the model, which stays silent (NO_ANSWER) when
+    // nothing needs a reply. The English question heuristic would miss Hindi and Hinglish.
+    if (isQuestion || cleanText.split(/\s+/).length >= 4) {
       this.pendingQuestion.push(cleanText)
       if (this.questionTimer) clearTimeout(this.questionTimer)
       this.questionTimer = setTimeout(() => {
@@ -343,6 +350,8 @@ export class LiveAudioTranscriber {
     try {
       if (config.provider === 'groq' && config.groqApiKey) {
         text = await this.transcribeWithGroq(blob, config.groqApiKey)
+      } else if (config.provider === 'sarvam' && config.sarvamApiKey) {
+        text = await this.transcribeWithSarvam(blob, config.sarvamApiKey, config.sarvamLanguage || 'en-IN')
       } else if (config.provider === 'openai' && config.openaiApiKey) {
         text = await this.transcribeWithOpenAI(blob, config.openaiApiKey)
       } else if (config.provider === 'local') {
@@ -392,7 +401,6 @@ export class LiveAudioTranscriber {
     formData.append('file', blob, 'audio.webm')
     formData.append('model', 'whisper-large-v3-turbo')
     formData.append('response_format', 'json')
-    formData.append('language', 'en')
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
@@ -409,6 +417,25 @@ export class LiveAudioTranscriber {
 
     const data = await response.json()
     return data.text || ''
+  }
+
+  private async transcribeWithSarvam(blob: Blob, apiKey: string, language: string): Promise<string> {
+    const formData = new FormData()
+    formData.append('file', blob, 'audio.webm')
+    formData.append('model', 'saaras:v4')
+    formData.append('mode', 'transcribe')
+    formData.append('language_code', language)
+
+    const response = await fetch('https://api.sarvam.ai/speech-to-text', {
+      method: 'POST',
+      headers: { 'api-subscription-key': apiKey.trim() },
+      body: formData
+    })
+    if (!response.ok) {
+      throw new Error(`Sarvam STT error (${response.status}): ${(await response.text()).slice(0, 160)}`)
+    }
+    const data = await response.json()
+    return data.transcript || ''
   }
 
   private async transcribeWithOpenAI(blob: Blob, apiKey: string): Promise<string> {
