@@ -107,9 +107,9 @@ export async function summarizeDocument(text: string): Promise<string> {
     return await completeOpenRouterChat({
       apiKey,
       model,
-      maxTokens: 900,
+      maxTokens: 1200,
       systemPrompt:
-        'Condense the document into a compact fact sheet, max 450 words, plain text. Keep every concrete fact: names, employers, titles, dates, technologies, numbers and metrics. For a CV: headline, skills, experience (employer, role, dates, 2-3 achievements with numbers), projects, education. For a job description or notes: role, requirements, responsibilities, key facts. For a CV, end with one line: Likely target role - <role and level the CV points to>. No commentary, nothing invented.',
+        'Condense the document into a compact fact sheet, max 650 words, plain text. Keep every concrete fact (never drop a metric, tool, project or employer name): names, employers, titles, dates, technologies, numbers and metrics. For a CV: headline, skills, experience (employer, role, dates, 2-3 achievements with numbers), projects, education. For a job description or notes: role, requirements, responsibilities, key facts. For a CV, end with one line: Likely target role - <role and level the CV points to>. No commentary, nothing invented.',
       userPrompt: text.replace(/\s+/g, ' ').slice(0, 20000)
     })
   } catch (e) {
@@ -118,14 +118,49 @@ export async function summarizeDocument(text: string): Promise<string> {
   }
 }
 
-export function formatDocumentsPromptContext(docs: AttachedDocument[]): string {
+export function formatDocumentsPromptContext(docs: AttachedDocument[], includeRaw = false): string {
   if (!docs || docs.length === 0) return ''
 
   let context = "\n\n=== USER DOCUMENTS (the user's background and notes; use as facts, never paste) ===\n"
   for (const doc of docs) {
     const body = doc.summary || doc.content.replace(/\s+/g, ' ').slice(0, 8000)
     context += `--- ${doc.name} ---\n${body}\n`
+    // Without a typed question there is nothing to search with, so give the model the source text too (it is cached).
+    if (includeRaw && doc.summary) context += `[Full text]\n${doc.content.replace(/\s+/g, ' ').slice(0, 5000)}\n`
   }
   context += '=== END DOCUMENTS ===\n'
   return context
+}
+
+const STOP = new Set('the and for you your with that this have from about what tell was were how did can could would should them they their there then than into over also which when where who why not but are our out any all one has had been being its'.split(' '))
+const words = (t: string): string[] => (t.toLowerCase().match(/[\p{L}\p{N}+#.]{3,}/gu) || []).filter((w) => !STOP.has(w))
+
+/**
+ * Pull the few passages of the user's documents that best match the question, verbatim.
+ * The condensed sheet gives the overview; these give the exact numbers, tools and project names
+ * the answer should cite. Cheap keyword overlap, no embeddings.
+ */
+export function retrieveExcerpts(docs: AttachedDocument[], query: string, maxChars = 1600): string {
+  const q = new Set(words(query).map((w) => w.slice(0, 6)))
+  if (q.size === 0) return ''
+  const scored: { text: string; score: number; doc: number; from: number; to: number }[] = []
+  docs.forEach((doc, di) => {
+    // Sentence windows (3 sentences), so a fact and its numbers stay together.
+    const sentences = doc.content.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/)
+    for (let i = 0; i < sentences.length; i++) {
+      const text = sentences.slice(i, i + 3).join(' ').slice(0, 520)
+      const hits = new Set(words(text).map((w) => w.slice(0, 6)).filter((w) => q.has(w)))
+      if (hits.size > 0) scored.push({ text, score: hits.size, doc: di, from: i, to: i + 2 })
+    }
+  })
+  scored.sort((a, b) => b.score - a.score)
+  const picked: typeof scored = []
+  let used = 0
+  for (const s of scored) {
+    if (picked.some((p) => p.doc === s.doc && s.from <= p.to && s.to >= p.from)) continue // overlaps one already chosen
+    if (used + s.text.length > maxChars) continue
+    picked.push(s)
+    used += s.text.length
+  }
+  return picked.map((s) => `- ${s.text}`).join('\n')
 }
