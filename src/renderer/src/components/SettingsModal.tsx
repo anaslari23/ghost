@@ -357,6 +357,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                 </div>
 
+                <div className="setting-toggle-row">
+                  <div>
+                    <div className="setting-title">Send audio straight to the answering model</div>
+                    <div className="setting-desc">
+                      Fastest. Used when your chosen model accepts audio (for example Gemini); skips the separate transcription step.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    className="toggle-checkbox"
+                    checked={sttConfig.directAudio !== false}
+                    onChange={(e) => setSttConfig((prev) => ({ ...prev, directAudio: e.target.checked }))}
+                  />
+                </div>
+
                 <div className="field-group">
                   <label className="field-label">Speech-to-Text Engine</label>
                   <div className="modes-tab-bar mini">

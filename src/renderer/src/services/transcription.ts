@@ -19,6 +19,8 @@ export interface STTConfig {
   openaiApiKey?: string
   localEndpoint?: string
   autoAnswerOnQuestion: boolean
+  /** Send audio straight to the answering model when it accepts audio: skips the separate transcription step. */
+  directAudio?: boolean
   minSilenceMs: number
   audioDeviceId?: string
 }
@@ -33,6 +35,7 @@ export const DEFAULT_STT_CONFIG: STTConfig = {
   openaiApiKey: '',
   localEndpoint: 'http://127.0.0.1:8178/inference',
   autoAnswerOnQuestion: true,
+  directAudio: true,
   minSilenceMs: 1200
 }
 
@@ -115,7 +118,7 @@ export const getStoredSTTModel = (): string => localStorage.getItem(STT_MODEL_KE
 export const setStoredSTTModel = (id: string): void => localStorage.setItem(STT_MODEL_KEY, id)
 
 /** Decode a recorded blob and re-encode as 16 kHz mono 16-bit WAV (the format audio-input models accept). */
-async function blobToWavBase64(blob: Blob): Promise<string> {
+export async function blobToWavBase64(blob: Blob): Promise<string> {
   const ctx = new AudioContext({ sampleRate: 16000 })
   const audio = await ctx.decodeAudioData(await blob.arrayBuffer())
   await ctx.close()
@@ -181,7 +184,7 @@ class AudioLane {
           this.silenceTimer = null
         }
         // Long monologue: cut it so the first part gets transcribed without waiting for a pause.
-        if (now - this.speechStart > 15000) this.finish()
+        if (now - this.speechStart > 10000) this.finish()
       } else if (this.speaking && !this.silenceTimer) {
         this.silenceTimer = setTimeout(() => this.finish(), this.minSilenceMs)
       }
@@ -216,6 +219,8 @@ export class LiveAudioTranscriber {
   private onVolumeChange: (volumeLevel: number) => void
   private onInterimText?: (interim: string) => void
   private onError?: (message: string) => void
+  private useDirectAudio?: () => boolean
+  private onAudioClip?: (wavBase64: string) => void
 
   private rollingTurns: TranscriptTurn[] = []
   private pendingQuestion: string[] = []
@@ -227,7 +232,12 @@ export class LiveAudioTranscriber {
     onVolumeChange: (volumeLevel: number) => void
     onInterimText?: (interim: string) => void
     onError?: (message: string) => void
+    /** If this returns true, clips go to onAudioClip instead of a transcription engine. */
+    useDirectAudio?: () => boolean
+    onAudioClip?: (wavBase64: string) => void
   }) {
+    this.useDirectAudio = callbacks.useDirectAudio
+    this.onAudioClip = callbacks.onAudioClip
     this.onTurnTranscribed = callbacks.onTurnTranscribed
     this.onQuestionDetected = callbacks.onQuestionDetected
     this.onVolumeChange = callbacks.onVolumeChange
@@ -277,7 +287,8 @@ export class LiveAudioTranscriber {
       this.volumes[i] = v
       this.onVolumeChange(Math.max(...this.volumes))
     }
-    const silence = Math.min(config.minSilenceMs || 800, 800)
+    // Direct audio needs the whole question in one clip, so it waits a little longer for a pause.
+    const silence = this.direct() ? 800 : Math.min(config.minSilenceMs || 550, 550)
     if (system) {
       this.streams.push(system)
       this.lanes.push(new AudioLane(system, 'Interviewer', onBlob, vol(0), silence))
@@ -337,13 +348,25 @@ export class LiveAudioTranscriber {
         this.pendingQuestion = []
         this.questionTimer = null
         this.onQuestionDetected(question, [...this.rollingTurns])
-      }, 400)
+      }, 250)
     } else if (this.questionTimer) {
       this.pendingQuestion.push(cleanText)
     }
   }
 
+  private direct(): boolean {
+    return !!(this.useDirectAudio?.() && this.onAudioClip && getStoredSTTConfig().directAudio !== false)
+  }
+
   private async processSpeechAudio(blob: Blob, speaker: Speaker): Promise<void> {
+    if (this.direct() && speaker === 'Interviewer') {
+      try {
+        this.onAudioClip!(await blobToWavBase64(blob))
+      } catch (e: any) {
+        this.onError?.(`Could not read the audio clip: ${e?.message || e}`)
+      }
+      return
+    }
     const config = getStoredSTTConfig()
     let text = ''
     this.onInterimText?.('transcribing')
@@ -380,6 +403,9 @@ export class LiveAudioTranscriber {
       body: JSON.stringify({
         model,
         max_tokens: 300,
+        temperature: 0,
+        reasoning: { effort: 'low' },
+        provider: { sort: 'latency', allow_fallbacks: true }, // fastest provider: this call sits on the critical path
         messages: [
           {
             role: 'user',

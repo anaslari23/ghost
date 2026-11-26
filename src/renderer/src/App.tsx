@@ -22,6 +22,7 @@ import {
   getStoredActiveMode,
   setStoredActiveMode,
   getStoredModel,
+  getCachedModels,
   fetchOpenRouterModels,
   streamOpenRouterChat
 } from './services/openrouter'
@@ -31,13 +32,15 @@ import {
   saveStoredDocuments,
   parseFileToText,
   summarizeDocument,
-  formatDocumentsPromptContext
+  formatDocumentsPromptContext,
+  retrieveExcerpts
 } from './services/documents'
 import {
   LiveAudioTranscriber,
   TranscriptTurn,
   getStoredSTTConfig,
-  saveStoredSTTConfig
+  saveStoredSTTConfig,
+  isLikelyQuestion
 } from './services/transcription'
 import { FormattedAnswer } from './components/FormattedAnswer'
 import { SettingsModal } from './components/SettingsModal'
@@ -225,7 +228,8 @@ export const App: React.FC = () => {
     async (
       customPromptExtension?: string,
       questionOverride?: string,
-      turnsOverride?: TranscriptTurn[]
+      turnsOverride?: TranscriptTurn[],
+      audioBase64?: string // the speaker's last utterance, when the answering model takes audio directly
     ) => {
 
       const apiKey = getStoredApiKey()
@@ -252,7 +256,7 @@ export const App: React.FC = () => {
         // 1. Capture primary display screenshot
         let screenshotBase64: string | undefined
         // Images are the costliest part of a request: skip them for spoken questions that don't point at the screen.
-        const needsScreen = !questionOverride || SCREEN_RE.test(questionOverride)
+        const needsScreen = !audioBase64 && (!questionOverride || SCREEN_RE.test(questionOverride))
         try {
           if (needsScreen) screenshotBase64 = await window.api.captureScreen(Math.min(activeConfig.maxScreenshotEdge, 1280))
         } catch (err: any) {
@@ -262,7 +266,7 @@ export const App: React.FC = () => {
         setStatus('streaming')
 
         // 2. Prepare system prompt enhanced with candidate's uploaded CV / docs
-        const docContext = formatDocumentsPromptContext(activeModeDocs)
+        const docContext = formatDocumentsPromptContext(activeModeDocs, !!audioBase64)
         const gated = !!turnsOverride
         gatedPendingRef.current = gated
         // Kept identical between requests (and free of per-request text) so provider prompt caching applies.
@@ -279,14 +283,23 @@ export const App: React.FC = () => {
         if (context.length > 0) {
           userPrompt += `RECENT SPEECH (speech-to-text, may contain errors; background only):\n${context.map((t) => t.text).join('\n')}\n\n`
         }
-        userPrompt += targetQuestion
-          ? `QUESTION TO ANSWER:\n"${targetQuestion}"\n\n`
-          : `No question was detected in the last two minutes.\n\n`
+        if (audioBase64) {
+          userPrompt += `The attached audio is what the other person just said (English, Hindi or Hinglish). Reply in exactly this format:\nHEARD: <verbatim transcript of what they said, on one line>\n<then your answer, or the single word NO_ANSWER if it needs no reply: small talk, filler, background noise, music, or a statement with no question or request>\n\n`
+        } else {
+          userPrompt += targetQuestion
+            ? `QUESTION TO ANSWER:\n"${targetQuestion}"\n\n`
+            : `No question was detected in the last two minutes.\n\n`
+        }
+        // Verbatim passages of the CV/notes that match this question: exact numbers, tools and project names to cite.
+        const excerpts = targetQuestion ? retrieveExcerpts(activeModeDocs, `${targetQuestion} ${context.map((t) => t.text).join(' ')}`) : ''
+        if (excerpts) {
+          userPrompt += `MOST RELEVANT PASSAGES FROM THE USER'S DOCUMENTS:\n${excerpts}\n\n`
+        }
         if (screenshotBase64) {
           userPrompt += `A screenshot of the screen is attached. Use it only if the question refers to it.\n\n`
         }
-        userPrompt += `Answer only the question above, concise enough to say aloud. Use the documents only where they genuinely fit. If the question is missing or unclear, say so in one line instead of guessing.`
-        if (gated) {
+        userPrompt += `Answer only the question above, concise enough to say aloud. Make it specific: cite the exact project, employer, tools and numbers from the documents where they fit, in your own words. If the question is missing or unclear, say so in one line instead of guessing.`
+        if (gated && !audioBase64) {
           userPrompt += `\nYou are listening live: if the latest speech needs no answer (small talk, filler, the user talking, a statement with no question or request), reply with exactly NO_ANSWER.`
         }
 
@@ -295,6 +308,8 @@ export const App: React.FC = () => {
         }
 
         if (!gated) setCurrentQ(targetQuestion)
+        let qText = targetQuestion
+        let heard: string | null = null
         let full = ''
         let released = !gated
         let silent = false
@@ -309,14 +324,39 @@ export const App: React.FC = () => {
           systemPrompt: combinedSystemPrompt,
           userPrompt,
           screenshotBase64,
+          audioBase64,
           history: historyRef.current.flatMap((h) => [
             { role: 'user' as const, content: h.q },
             { role: 'assistant' as const, content: h.a }
           ]),
           onDelta: (token: string) => {
             full += token
+            let body = full
+            if (audioBase64) {
+              // First line is the model's transcript of the clip; the rest is the answer (or NO_ANSWER).
+              const nl = full.indexOf('\n')
+              if (nl < 0) return
+              if (heard === null) {
+                heard = full.slice(0, nl).replace(/^\s*HEARD:\s*/i, '').trim()
+                if (heard.length < 3 || /^\[.*\]$/.test(heard)) {
+                  silent = true
+                } else {
+                  qText = heard
+                  const turn: TranscriptTurn = {
+                    id: `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    speaker: 'Interviewer',
+                    text: heard,
+                    timestamp: Date.now(),
+                    isQuestion: isLikelyQuestion(heard)
+                  }
+                  setRecentTurns((prev) => [...prev.slice(-20), turn])
+                }
+              }
+              body = full.slice(nl + 1)
+            }
+            if (silent) return
             if (gated && !released) {
-              const t = full.trim()
+              const t = body.trim()
               if (t.length < 9 && 'NO_ANSWER'.startsWith(t)) return // might still turn into NO_ANSWER
               if (t.startsWith('NO_ANSWER')) {
                 silent = true
@@ -326,15 +366,15 @@ export const App: React.FC = () => {
               gatedPendingRef.current = false
               lastAutoAnswerTimeRef.current = Date.now()
               archiveAnswer()
-              setCurrentQ(targetQuestion)
+              setCurrentQ(qText)
             }
-            if (silent) return
-            setAnswer(full)
+            setAnswer(body)
           },
           signal: abortController.signal
         })
 
-        if (!silent && full.trim()) remember(targetQuestion || customPromptExtension || 'Answer from the screen', full)
+        const finalBody = audioBase64 ? full.slice(full.indexOf('\n') + 1) : full
+        if (!silent && finalBody.trim()) remember(qText || customPromptExtension || 'Answer from the screen', finalBody)
 
         setStatus('idle')
       } catch (e: any) {
@@ -365,6 +405,11 @@ export const App: React.FC = () => {
     localStorage.setItem('ghost_conversation', JSON.stringify({ thread, answer, currentQ }))
   }, [thread, answer, currentQ, status])
 
+  // If the chosen model takes audio, clips go straight to it: no separate transcription round trip.
+  // Read at use time: the model list (and its audio flags) can finish loading after first render.
+  const modelRef = useRef(model)
+  modelRef.current = model
+
   const handleAskRef = useRef(handleAsk)
   handleAskRef.current = handleAsk
 
@@ -388,6 +433,14 @@ export const App: React.FC = () => {
       },
       onVolumeChange: (vol) => {
         setAudioVolume(vol)
+      },
+      useDirectAudio: () => !!getCachedModels().find((m) => m.id === modelRef.current)?.hasAudio,
+      onAudioClip: (wav) => {
+        if (autoAnswerRef.current && !isPausedRef.current && (statusRef.current === 'idle' || gatedPendingRef.current)) {
+          if (Date.now() - lastAutoAnswerTimeRef.current > 8000) {
+            handleAskRef.current(undefined, undefined, [], wav)
+          }
+        }
       },
       onError: (message) => setErrorMessage(message),
       onInterimText: (interim) => {
