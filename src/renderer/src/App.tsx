@@ -6,6 +6,7 @@ import {
   Settings,
   FileText,
   Target,
+  History,
   Copy,
   Check,
   Maximize2, MousePointer2,
@@ -46,6 +47,8 @@ import { FormattedAnswer } from './components/FormattedAnswer'
 import { SettingsModal } from './components/SettingsModal'
 import { DocumentsModal } from './components/DocumentsModal'
 import { BriefModal } from './components/BriefModal'
+import { HistoryModal } from './components/HistoryModal'
+import { addSession } from './services/history'
 import { Brief, getStoredBrief, formatBriefPromptContext, hasBrief } from './services/brief'
 
 const SCREEN_RE = /\b(screen|this|here|code|problem|diagram|slide|see|shown|following|below|above|function|error|bug|chart|table)\b/i
@@ -60,7 +63,15 @@ export const App: React.FC = () => {
   // The conversation survives pausing, mode switches and restarts; only Clear wipes it.
   const saved = useMemo(() => {
     try {
-      return JSON.parse(localStorage.getItem('ghost_conversation') || '{}')
+      const s = JSON.parse(localStorage.getItem('ghost_conversation') || '{}')
+      // A conversation left idle for hours belongs to a past session: file it under History and start fresh.
+      if (s.updatedAt && Date.now() - s.updatedAt > 4 * 3600_000) {
+        const items = [...(s.thread || []), ...(s.answer ? [{ q: s.currentQ || '', a: s.answer }] : [])]
+        addSession(items, s.mode || 'interview', s.startedAt || s.updatedAt)
+        localStorage.removeItem('ghost_conversation')
+        return {}
+      }
+      return s
     } catch {
       return {}
     }
@@ -70,6 +81,11 @@ export const App: React.FC = () => {
   const [thread, setThread] = useState<{ id: number; q: string; a: string }[]>(saved.thread || [])
   const [currentQ, setCurrentQ] = useState<string>(saved.currentQ || '')
   const answerRef = useRef('')
+  const activeModeRef = useRef<AppMode>('interview')
+  activeModeRef.current = activeMode
+  const threadRef = useRef<{ q: string; a: string }[]>([])
+  threadRef.current = thread
+  const startedAtRef = useRef<number>(saved.startedAt || 0)
   answerRef.current = answer
   const currentQRef = useRef('')
   currentQRef.current = currentQ
@@ -91,6 +107,7 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isDocsOpen, setIsDocsOpen] = useState<boolean>(false)
   const [isBriefOpen, setIsBriefOpen] = useState<boolean>(false)
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false)
   const [brief, setBrief] = useState<Brief>(getStoredBrief)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -199,6 +216,13 @@ export const App: React.FC = () => {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
+    // Clear files the conversation under History instead of destroying it.
+    addSession(
+      [...threadRef.current, ...(answerRef.current ? [{ q: currentQRef.current, a: answerRef.current }] : [])],
+      activeModeRef.current,
+      startedAtRef.current || Date.now()
+    )
+    startedAtRef.current = 0
     setAnswer('')
     setCurrentQ('')
     setThread([])
@@ -402,7 +426,11 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     if (status === 'streaming' || status === 'thinking') return
-    localStorage.setItem('ghost_conversation', JSON.stringify({ thread, answer, currentQ }))
+    if (!startedAtRef.current && (thread.length || answer)) startedAtRef.current = Date.now()
+    localStorage.setItem(
+      'ghost_conversation',
+      JSON.stringify({ thread, answer, currentQ, startedAt: startedAtRef.current, updatedAt: Date.now(), mode: activeModeRef.current })
+    )
   }, [thread, answer, currentQ, status])
 
   // If the chosen model takes audio, clips go straight to it: no separate transcription round trip.
@@ -676,6 +704,10 @@ export const App: React.FC = () => {
             {hasBrief(brief) && <span>{brief.role || brief.company || 'Target'}</span>}
           </button>
 
+          <button className="tool-icon-btn" onClick={() => setIsHistoryOpen(true)} title="Past conversations">
+            <History size={12} />
+          </button>
+
           {/* Click Through Toggle */}
           <button
             className={`tool-pill ${clickThrough ? 'active-tool' : ''}`}
@@ -739,7 +771,7 @@ export const App: React.FC = () => {
               <span>Stop</span>
             </button>
           ) : answer || thread.length > 0 ? (
-            <button className="primary-action-btn clear-state" onClick={handleClear} title="Clear overlay (⌘⇧⌫)">
+            <button className="primary-action-btn clear-state" onClick={handleClear} title="Clear: saves this conversation to History (⌘⇧⌫)">
               <Trash2 size={10} />
               <span>Clear</span>
             </button>
@@ -889,6 +921,8 @@ export const App: React.FC = () => {
         onSaveModes={handleSaveModes}
         activeMode={activeMode}
       />
+
+      <HistoryModal isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} />
 
       <BriefModal isOpen={isBriefOpen} onClose={() => setIsBriefOpen(false)} onSaved={setBrief} />
 
