@@ -1,17 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Square,
-  Play,
-  Pause,
   Settings,
   FileText,
   Target,
-  History,
+  ArrowLeft,
   Copy,
   Check,
   Maximize2, MousePointer2,
   Minimize2,
-  Trash2,
   ChevronDown,
   ChevronUp
 } from 'lucide-react'
@@ -40,14 +37,13 @@ import {
   LiveAudioTranscriber,
   TranscriptTurn,
   getStoredSTTConfig,
-  saveStoredSTTConfig,
   isLikelyQuestion
 } from './services/transcription'
 import { FormattedAnswer } from './components/FormattedAnswer'
 import { SettingsModal } from './components/SettingsModal'
 import { DocumentsModal } from './components/DocumentsModal'
 import { BriefModal } from './components/BriefModal'
-import { HistoryModal } from './components/HistoryModal'
+import { HomeScreen } from './components/HomeScreen'
 import { addSession } from './services/history'
 import { Brief, getStoredBrief, formatBriefPromptContext, hasBrief } from './services/brief'
 
@@ -93,7 +89,13 @@ export const App: React.FC = () => {
   const [copiedAll, setCopiedAll] = useState<boolean>(false)
 
   // Live Audio & Real-time Conversation State
-  const [isListening, setIsListening] = useState<boolean>(true)
+  const [isListening, setIsListening] = useState<boolean>(false)
+  const [screen, setScreen] = useState<'home' | 'session'>('home')
+  const [resume, setResume] = useState<{ mode: AppMode; title: string } | null>(() =>
+    saved.thread?.length || saved.answer
+      ? { mode: (saved.mode || 'interview') as AppMode, title: String(saved.currentQ || saved.thread?.[saved.thread.length - 1]?.q || 'last chat').slice(0, 60) }
+      : null
+  )
   const [autoAnswerEnabled, setAutoAnswerEnabled] = useState<boolean>(() => {
     return getStoredSTTConfig().autoAnswerOnQuestion ?? true
   })
@@ -107,7 +109,6 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false)
   const [isDocsOpen, setIsDocsOpen] = useState<boolean>(false)
   const [isBriefOpen, setIsBriefOpen] = useState<boolean>(false)
-  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false)
   const [brief, setBrief] = useState<Brief>(getStoredBrief)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -490,24 +491,29 @@ export const App: React.FC = () => {
     }
   }, [isListening])
 
-  // One switch: Start = listen + auto-answer on; Pause = mic off, nothing fires.
-  const isLive = isListening && autoAnswerEnabled && !isPaused
-  const toggleLive = useCallback(() => {
-    const next = !(isListening && autoAnswerRef.current && !isPausedRef.current)
-    setIsPaused(!next)
-    setIsListening(next)
-    setAutoAnswerEnabled(next)
-    const cfg = getStoredSTTConfig()
-    cfg.autoAnswerOnQuestion = next
-    saveStoredSTTConfig(cfg)
-    if (!next) handleStop()
-  }, [isListening, handleStop])
-
-  const handleSelectMode = useCallback((mode: AppMode) => {
-    historyRef.current = []
-    setActiveMode(mode)
-    setStoredActiveMode(mode)
-  }, [])
+  // No manual start: opening a session starts listening and auto-answering; going home files it under past chats.
+  const isLive = isListening && !isPaused
+  const startSession = useCallback(
+    (mode: AppMode, resuming = false) => {
+      if (!resuming) {
+        handleClear()
+        historyRef.current = []
+      }
+      setResume(null)
+      setActiveMode(mode)
+      setStoredActiveMode(mode)
+      setIsPaused(false)
+      setAutoAnswerEnabled(true)
+      setIsListening(true)
+      setScreen('session')
+    },
+    [handleClear]
+  )
+  const goHome = useCallback(() => {
+    handleClear()
+    setIsListening(false)
+    setScreen('home')
+  }, [handleClear])
 
   const handleSaveModes = useCallback((newModes: ModesMap) => {
     setModes(newModes)
@@ -590,8 +596,6 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [status, handleStop])
-
-  const modesList: AppMode[] = ['interview', 'meeting', 'sales', 'custom']
 
   // Most recent speech line for live conversation feed
   const latestTurn = recentTurns[recentTurns.length - 1]
@@ -704,10 +708,6 @@ export const App: React.FC = () => {
             {hasBrief(brief) && <span>{brief.role || brief.company || 'Target'}</span>}
           </button>
 
-          <button className="tool-icon-btn" onClick={() => setIsHistoryOpen(true)} title="Past conversations">
-            <History size={12} />
-          </button>
-
           {/* Click Through Toggle */}
           <button
             className={`tool-pill ${clickThrough ? 'active-tool' : ''}`}
@@ -738,52 +738,30 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      <div className="mode-row">
-        {/* Segmented Mode Selector */}
-        <div className="segmented-modes-bar">
-          {modesList.map((m) => (
-            <button
-              key={m}
-              className={`segmented-mode-btn ${activeMode === m ? 'active' : ''}`}
-              onClick={() => handleSelectMode(m)}
-            >
-              {modes[m].name}
-            </button>
-          ))}
-        </div>
-
-          <button
-            className={`live-btn ${isLive ? 'live' : ''}`}
-            onClick={toggleLive}
-            title={isLive ? 'Listening and answering questions. Click to pause.' : 'Start listening and auto-answering'}
-          >
-            {isLive ? <Pause size={11} /> : <Play size={11} />}
-            <span>{isLive ? 'Pause' : 'Start'}</span>
+      {screen === 'session' && (
+        <div className="mode-row">
+          <button className="session-back" onClick={goHome} title="Save this chat and go back">
+            <ArrowLeft size={12} />
+            <span>{modes[activeMode].name}</span>
+          </button>
+          <span className={`listen-chip ${isLive ? 'on' : ''}`}>
+            <span className="listen-dot" />
+            {status === 'thinking' ? 'Thinking' : status === 'streaming' ? 'Answering' : 'Listening'}
             {isLive && audioVolume > 5 && (
               <span className="volume-indicator-bar" style={{ width: `${Math.min(14, audioVolume / 4)}px` }} />
             )}
-          </button>
-
-          {/* Primary Action Button (Stop or Clear or Ask) */}
-          {status === 'thinking' || status === 'streaming' ? (
+          </span>
+          {(status === 'thinking' || status === 'streaming') && (
             <button className="primary-action-btn stop-state" onClick={handleStop} title="Stop generation (Esc)">
               <Square size={10} fill="currentColor" />
               <span>Stop</span>
             </button>
-          ) : answer || thread.length > 0 ? (
-            <button className="primary-action-btn clear-state" onClick={handleClear} title="Clear: saves this conversation to History (⌘⇧⌫)">
-              <Trash2 size={10} />
-              <span>Clear</span>
-            </button>
-          ) : (
-            <button className="primary-action-btn ask-state" onClick={() => handleAsk()} title="Capture Screen & Spoken Context (⌘↵)">
-              <span>Ask now</span>
-            </button>
           )}
-      </div>
+        </div>
+      )}
 
       {/* Live Conversation Transcript Feed */}
-      {(interimSpeech || (latestTurn && !(answer && latestTurn.text === currentQ))) && (
+      {screen === 'session' && (interimSpeech || (latestTurn && !(answer && latestTurn.text === currentQ))) && (
       <div className="live-transcript-feed">
         <div className="transcript-meta-lane">
           <div className="transcript-live-tag">
@@ -829,7 +807,17 @@ export const App: React.FC = () => {
 
       )}
 
+      {screen === 'home' && (
+        <HomeScreen
+          names={{ interview: modes.interview.name, meeting: modes.meeting.name, sales: modes.sales.name, custom: modes.custom.name }}
+          resume={resume}
+          onNew={(m) => startSession(m)}
+          onResume={() => startSession(resume!.mode, true)}
+        />
+      )}
+
       {/* Overlay Body */}
+      {screen === 'session' && (
       <div className="overlay-body">
         {/* Content Box */}
         <div className="content-box" ref={answerBoxRef}>
@@ -858,7 +846,7 @@ export const App: React.FC = () => {
             </div>
           ) : (
             !errorMessage &&
-            thread.length === 0 && <div className="empty-hint">{isLive ? 'Listening' : 'Paused'}</div>
+            thread.length === 0 && <div className="empty-hint">Questions asked aloud are answered here automatically. You can also type one below.</div>
           )}
         </div>
 
@@ -912,6 +900,7 @@ export const App: React.FC = () => {
           </div>
         )}
       </div>
+      )}
 
       {/* Settings & Model Catalog Modal */}
       <SettingsModal
@@ -921,8 +910,6 @@ export const App: React.FC = () => {
         onSaveModes={handleSaveModes}
         activeMode={activeMode}
       />
-
-      <HistoryModal isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} />
 
       <BriefModal isOpen={isBriefOpen} onClose={() => setIsBriefOpen(false)} onSaved={setBrief} />
 

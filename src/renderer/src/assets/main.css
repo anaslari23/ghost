@@ -1797,3 +1797,44 @@ body,
 
 .tool-pill, .tool-pill span { white-space: nowrap; }
 .model-tag-pill { max-width: 120px; }
+
+/* Home screen */
+.home { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }
+.home-label { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-dim, #7a8190); margin-top: 2px; }
+.home-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.home-mode { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.08); color: #e8eaf0; cursor: pointer; transition: background .12s, border-color .12s; }
+.home-mode:hover { background: rgba(80,120,255,.14); border-color: rgba(110,140,255,.5); }
+.home-mode-name { font-size: 13px; font-weight: 600; }
+.home-mode-hint { font-size: 11px; color: #8b93a3; }
+.home-resume { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(60,200,120,.1); border: 1px solid rgba(60,200,120,.35); color: #e8eaf0; cursor: pointer; text-align: left; }
+.home-dot { width: 7px; height: 7px; border-radius: 50%; background: #3cc878; flex: none; }
+.home-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.home-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 9px; background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06); cursor: pointer; }
+.home-row:hover { background: rgba(255,255,255,.07); }
+.home-row-main { flex: 1; min-width: 0; }
+.home-row-title { font-size: 12.5px; color: #e8eaf0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.home-when { font-size: 10.5px; color: #7a8190; white-space: nowrap; }
+.home-back { align-self: flex-start; display: flex; gap: 10px; align-items: baseline; background: none; border: 0; color: #c8cede; font-size: 12px; cursor: pointer; padding: 0; }
+.session-back { display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); color: #e8eaf0; border-radius: 8px; padding: 4px 9px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.session-back:hover { background: rgba(255,255,255,.12); }
+.listen-chip { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: #8b93a3; margin-right: auto; margin-left: 8px; }
+.listen-chip.on { color: #7fe0a8; }
+.listen-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.listen-chip.on .listen-dot { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* v2 minimal skin */
+.overlay-container { background: rgba(17,18,23,.96) !important; backdrop-filter: blur(28px) saturate(1.4); border: 1px solid rgba(255,255,255,.09) !important; border-radius: 18px !important; }
+.overlay-header { padding: 10px 14px 6px !important; }
+.model-tag-pill, .status-pill-state { display: none !important; }
+.home { gap: 10px; padding: 6px 14px 14px; }
+.home-top { display: flex; align-items: center; justify-content: space-between; }
+.home-title { font-size: 20px; font-weight: 650; color: #f2f3f7; letter-spacing: -.01em; }
+.home-new { background: #fff; color: #111; border: 0; border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 650; cursor: pointer; }
+.home-new:hover { background: #e6e8f0; }
+.home-row { background: transparent; border: 0; border-bottom: 1px solid rgba(255,255,255,.06); border-radius: 0; padding: 11px 4px; }
+.home-row:hover { background: rgba(255,255,255,.04); }
+.home-row-title { font-size: 13.5px; }
+.home-pick { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; text-align: left; padding: 14px 14px; border-radius: 14px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07); color: #f2f3f7; cursor: pointer; }
+.home-pick:hover { background: rgba(255,255,255,.1); }
+.home-resume { border-radius: 12px; }
