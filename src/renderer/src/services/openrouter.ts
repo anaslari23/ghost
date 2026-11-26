@@ -8,6 +8,7 @@ export interface OpenRouterModel {
   completionPricePerMillion: number
   contextLength: number
   isVision: boolean
+  hasAudio?: boolean
   isFree: boolean
 }
 
@@ -18,7 +19,8 @@ export const DEFAULT_MODES: ModesMap = {
 - Understand the question's intent, then build the answer from the user's background below. Never paste or list the CV: pick the 1-2 most relevant experiences, retell them naturally with their key numbers, and tie them to what is being asked (and to the target role: the one given below, otherwise the role the CV points to).
 - Open with a 1-2 sentence direct answer they can say immediately, then at most 3 short supporting bullets.
 - Behavioral question: a tight STAR story (about 120 words). Technical or system design: the approach and key trade-offs, citing real experience only where it genuinely fits. Coding: approach, complexity, clean code, edge cases.
-- If the background has nothing relevant, answer well in general terms and say so briefly. Never invent employers, titles, degrees or metrics.`,
+- Be specific, never generic: name the actual project, employer, tools and numbers from the background, and say what the user personally did and the outcome. Passages marked as most relevant are verbatim facts; prefer them over the overview. "Tell me about yourself": present role, key past wins, core skills, why this role.
+- If the documents don't directly cover the question, never say so and never stop. Answer confidently from the closest related experience and the skills and stack the documents show, reasoning as that person would (how they would approach it, what they would use). Extend plausibly, but do not invent employers, job titles, degrees, certifications or specific numbers that are not in the documents.`,
     model: '',
     maxScreenshotEdge: 1280
   },
@@ -43,14 +45,14 @@ export const DEFAULT_MODES: ModesMap = {
   custom: {
     name: 'Custom',
     systemPrompt:
-      "You are a real-time assistant. Work out what is being asked from the speech and the screen, and give a concise, directly usable answer. Use the user's documents when relevant. Never invent facts.",
+      "You are a real-time assistant. Work out what is being asked from the speech and the screen, and give a concise, directly usable answer. Use the user's documents when relevant; if they don't cover the question, answer from the closest related background and the skills they show. Never invent employers, titles, degrees or specific numbers.",
     model: '',
     maxScreenshotEdge: 1280
   }
 }
 
 // Bump when DEFAULT_MODES prompts change so stale saved prompts don't override them.
-const PROMPTS_VERSION = '3'
+const PROMPTS_VERSION = '5'
 
 const STORAGE_KEYS = {
   API_KEY: 'cluely_openrouter_api_key',
@@ -135,11 +137,11 @@ const usable = (m: any): boolean =>
   parseFloat(m?.pricing?.prompt || '0') >= 0 && parseFloat(m?.pricing?.completion || '0') >= 0 && !JUNK.test(m.id)
 
 // First preference that matches wins; within a preference the newest model. Falls back to the cheapest real paid model.
-function pickBest(list: any[], prefs: RegExp[]): string {
+function pickBest(list: any[], prefs: RegExp[], exclude = /image|lite|thinking|:/i): string {
   const ok = list.filter((m) => usable(m) && (m.context_length || 0) >= 32000)
   const newest = (a: any, b: any): number => (b.created || 0) - (a.created || 0)
   for (const re of prefs) {
-    const hit = ok.filter((m) => re.test(m.id) && !/image|lite|thinking|:free/i.test(m.id)).sort(newest)[0]
+    const hit = ok.filter((m) => re.test(m.id) && !exclude.test(m.id)).sort(newest)[0]
     if (hit) return hit.id
   }
   const paid = ok.filter((m) => parseFloat(m.pricing.prompt) > 0 && parseFloat(m.pricing.completion) > 0)
@@ -196,7 +198,7 @@ export async function fetchOpenRouterModels(apiKey?: string): Promise<OpenRouter
     (m: any) => (m?.architecture?.input_modalities || []).includes('audio') && (m?.architecture?.output_modalities || ['text']).includes('text')
   )
   try {
-    localStorage.setItem('ghost_stt_model', pickBest(audio, [/gemini.*flash/i, /gpt.*audio.*mini|gpt.*mini/i, /voxtral/i]))
+    localStorage.setItem('ghost_stt_model', pickBest(audio, [/gemini.*flash-lite/i, /gemini.*flash/i, /gpt.*audio.*mini|gpt.*mini/i, /voxtral/i], /image|thinking|:/i))
   } catch {}
 
   // Eligible = takes text + screenshot in, streams text out, and has room for a CV + transcript.
@@ -230,6 +232,7 @@ export async function fetchOpenRouterModels(apiKey?: string): Promise<OpenRouter
       completionPricePerMillion: completionUSD * 1_000_000,
       contextLength: m?.context_length || 0,
       isVision: !!isVision,
+      hasAudio: modalities.includes('audio'),
       isFree: !!isFree
     }
   })
@@ -251,13 +254,15 @@ export interface StreamChatOptions {
   systemPrompt: string
   userPrompt: string
   screenshotBase64?: string
+  /** 16 kHz mono WAV, base64: the speaker's last utterance, for models that take audio directly. */
+  audioBase64?: string
   history?: { role: 'user' | 'assistant'; content: string }[]
   onDelta: (token: string) => void
   signal?: AbortSignal
 }
 
 export async function streamOpenRouterChat(options: StreamChatOptions): Promise<void> {
-  const { apiKey, model, systemPrompt, userPrompt, screenshotBase64, history = [], onDelta, signal } = options
+  const { apiKey, model, systemPrompt, userPrompt, screenshotBase64, audioBase64, history = [], onDelta, signal } = options
 
   if (!apiKey) {
     throw new Error('Please set your OpenRouter API key in Settings first.')
@@ -267,6 +272,9 @@ export async function streamOpenRouterChat(options: StreamChatOptions): Promise<
   }
 
   const userContentParts: any[] = [{ type: 'text', text: userPrompt }]
+  if (audioBase64) {
+    userContentParts.push({ type: 'input_audio', input_audio: { data: audioBase64, format: 'wav' } })
+  }
 
   // Only attach screenshot if screenshot is present and model supports vision
   if (screenshotBase64) {
