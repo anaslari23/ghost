@@ -373,6 +373,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       Groq Whisper (Fastest, Free)
                     </button>
                     <button
+                      className={`mode-tab-btn ${sttConfig.provider === 'sarvam' ? 'active' : ''}`}
+                      onClick={() => setSttConfig((prev) => ({ ...prev, provider: 'sarvam' }))}
+                    >
+                      Sarvam (Indian accents)
+                    </button>
+                    <button
                       className={`mode-tab-btn ${sttConfig.provider === 'openai' ? 'active' : ''}`}
                       onClick={() => setSttConfig((prev) => ({ ...prev, provider: 'openai' }))}
                     >
@@ -409,6 +415,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     />
                     <span className="hint-text">
                       Free tier available at console.groq.com. Transcribes meeting audio in ~250ms.
+                    </span>
+                  </div>
+                )}
+
+                {sttConfig.provider === 'sarvam' && (
+                  <div className="field-group">
+                    <label className="field-label">Sarvam API Key (saaras:v4)</label>
+                    <input
+                      type="password"
+                      className="input-field"
+                      placeholder="Sarvam subscription key"
+                      value={sttConfig.sarvamApiKey || ''}
+                      onChange={(e) => setSttConfig((prev) => ({ ...prev, sarvamApiKey: e.target.value }))}
+                    />
+                    <label className="field-label">Language</label>
+                    <select
+                      className="input-field"
+                      value={sttConfig.sarvamLanguage || 'en-IN'}
+                      onChange={(e) => setSttConfig((prev) => ({ ...prev, sarvamLanguage: e.target.value }))}
+                    >
+                      <option value="en-IN">English (India)</option>
+                      <option value="unknown">Auto-detect</option>
+                      <option value="hi-IN">Hindi</option>
+                      <option value="ta-IN">Tamil</option>
+                      <option value="te-IN">Telugu</option>
+                      <option value="kn-IN">Kannada</option>
+                      <option value="ml-IN">Malayalam</option>
+                      <option value="bn-IN">Bengali</option>
+                      <option value="mr-IN">Marathi</option>
+                      <option value="gu-IN">Gujarati</option>
+                      <option value="pa-IN">Punjabi</option>
+                    </select>
+                    <span className="hint-text">
+                      Tuned for Indian accents and languages. Hindi, Hinglish and English questions all trigger answers.
                     </span>
                   </div>
                 )}
